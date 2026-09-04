@@ -1,0 +1,30 @@
+# --- Backend (Java / Maven) ---
+backend/target/
+*.class
+
+# --- Frontend (Node / Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# --- Secrets / local environment ---
+# Never commit real credentials. application.yml reads these from env vars.
+.env
+.env.*
+*.env
+*-secrets.yml
+*-secrets.properties
+application-local.yml
+application-local.properties
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/
