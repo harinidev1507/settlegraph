@@ -33,6 +33,16 @@ public class Expense {
     @Column(name = "is_recurring")
     private boolean recurring = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "recurrence_frequency")
+    private RecurrenceFrequency recurrenceFrequency;
+
+    @Column(name = "recurring_source_id")
+    private Long recurringSourceId;
+
+    @Column(name = "recurrence_period")
+    private String recurrencePeriod;
+
     public Expense() {}
 
     public Expense(Long groupId, Long paidBy, BigDecimal amount, String currency, String category, String description) {
@@ -54,4 +64,10 @@ public class Expense {
     public LocalDateTime getExpenseDate() { return expenseDate; }
     public boolean isRecurring() { return recurring; }
     public void setRecurring(boolean recurring) { this.recurring = recurring; }
+    public RecurrenceFrequency getRecurrenceFrequency() { return recurrenceFrequency; }
+    public void setRecurrenceFrequency(RecurrenceFrequency recurrenceFrequency) { this.recurrenceFrequency = recurrenceFrequency; }
+    public Long getRecurringSourceId() { return recurringSourceId; }
+    public void setRecurringSourceId(Long recurringSourceId) { this.recurringSourceId = recurringSourceId; }
+    public String getRecurrencePeriod() { return recurrencePeriod; }
+    public void setRecurrencePeriod(String recurrencePeriod) { this.recurrencePeriod = recurrencePeriod; }
 }

@@ -8,11 +8,13 @@ import com.settlegraph.Artifacts.entity.Group;
 import com.settlegraph.Artifacts.entity.GroupInvite;
 import com.settlegraph.Artifacts.entity.GroupMember;
 import com.settlegraph.Artifacts.entity.User;
+import com.settlegraph.Artifacts.exception.NotFoundException;
 import com.settlegraph.Artifacts.repository.AuditLogRepository;
 import com.settlegraph.Artifacts.repository.GroupInviteRepository;
 import com.settlegraph.Artifacts.repository.GroupMemberRepository;
 import com.settlegraph.Artifacts.repository.GroupRepository;
 import com.settlegraph.Artifacts.repository.UserRepository;
+import com.settlegraph.Artifacts.security.GroupAccessGuard;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,19 +30,22 @@ public class GroupService {
     private final AuditLogRepository auditLogRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final GroupAccessGuard groupAccessGuard;
 
     public GroupService(GroupRepository groupRepository,
                          GroupMemberRepository groupMemberRepository,
                          GroupInviteRepository groupInviteRepository,
                          AuditLogRepository auditLogRepository,
                          UserRepository userRepository,
-                         NotificationService notificationService) {
+                         NotificationService notificationService,
+                         GroupAccessGuard groupAccessGuard) {
         this.groupRepository = groupRepository;
         this.groupMemberRepository = groupMemberRepository;
         this.groupInviteRepository = groupInviteRepository;
         this.auditLogRepository = auditLogRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.groupAccessGuard = groupAccessGuard;
     }
 
     @Transactional
@@ -69,16 +74,24 @@ public class GroupService {
         return groupRepository.findAllForUser(userId);
     }
 
-    public Group getGroup(Long groupId) {
+    /** Membership-checked entry point for GET /api/groups/{id}. */
+    public Group getGroup(Long groupId, Long requestingUserId) {
+        groupAccessGuard.requireMember(groupId, requestingUserId);
+        return getGroup(groupId);
+    }
+
+    /** Internal lookup (no access check) for code that has already verified membership. */
+    private Group getGroup(Long groupId) {
         return groupRepository.findById(groupId)
-                .orElseThrow(() -> new IllegalArgumentException("Group not found"));
+                .orElseThrow(() -> new NotFoundException("Group not found"));
     }
 
-    public List<GroupMember> getMembers(Long groupId) {
-        return groupMemberRepository.findByIdGroupId(groupId);
-    }
-
-    public List<GroupMemberResponse> getMembersWithDetails(Long groupId) {
+    /**
+     * Membership-checked: the member list carries usernames and emails, so
+     * it's only visible to people already in the group.
+     */
+    public List<GroupMemberResponse> getMembersWithDetails(Long groupId, Long requestingUserId) {
+        groupAccessGuard.requireMember(groupId, requestingUserId);
         List<Long> userIds = groupMemberRepository.findByIdGroupId(groupId).stream()
                 .map(m -> m.getId().getUserId())
                 .toList();
@@ -89,9 +102,7 @@ public class GroupService {
 
     @Transactional
     public GroupInviteResponse inviteMember(Long groupId, Long inviterUserId, String username) {
-        if (!groupMemberRepository.existsById(new GroupMember.GroupMemberId(inviterUserId, groupId))) {
-            throw new IllegalArgumentException("Only members of this group can invite others");
-        }
+        groupAccessGuard.requireMember(groupId, inviterUserId);
 
         User invitee = userRepository.findByUsername(username.trim().toLowerCase())
                 .orElseThrow(() -> new IllegalArgumentException("No user found with that username"));
@@ -120,7 +131,8 @@ public class GroupService {
         return toResponse(invite);
     }
 
-    public List<GroupInviteResponse> getInvitesForGroup(Long groupId) {
+    public List<GroupInviteResponse> getInvitesForGroup(Long groupId, Long requestingUserId) {
+        groupAccessGuard.requireMember(groupId, requestingUserId);
         return groupInviteRepository.findByGroupIdOrderByCreatedAtDesc(groupId).stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
@@ -135,7 +147,7 @@ public class GroupService {
     @Transactional
     public GroupInviteResponse respondToInvite(Long inviteId, Long respondingUserId, boolean accept) {
         GroupInvite invite = groupInviteRepository.findById(inviteId)
-                .orElseThrow(() -> new IllegalArgumentException("Invite not found"));
+                .orElseThrow(() -> new NotFoundException("Invite not found"));
 
         if (!invite.getInvitedUserId().equals(respondingUserId)) {
             throw new IllegalArgumentException("This invite isn't yours to respond to");

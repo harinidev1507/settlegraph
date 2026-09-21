@@ -1,6 +1,8 @@
 package com.settlegraph.Artifacts.service;
 
 import com.settlegraph.Artifacts.entity.Notification;
+import com.settlegraph.Artifacts.exception.ForbiddenException;
+import com.settlegraph.Artifacts.exception.NotFoundException;
 import com.settlegraph.Artifacts.repository.NotificationRepository;
 import org.springframework.stereotype.Service;
 
@@ -23,10 +25,14 @@ public class NotificationService {
         return notificationRepository.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
-    public void markRead(Long notificationId) {
-        notificationRepository.findById(notificationId).ifPresent(n -> {
-            n.markRead();
-            notificationRepository.save(n);
-        });
+    /** Only the notification's own recipient may mark it read. */
+    public void markRead(Long notificationId, Long requestingUserId) {
+        Notification n = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new NotFoundException("Notification not found"));
+        if (!n.getUserId().equals(requestingUserId)) {
+            throw new ForbiddenException("This notification isn't yours");
+        }
+        n.markRead();
+        notificationRepository.save(n);
     }
 }

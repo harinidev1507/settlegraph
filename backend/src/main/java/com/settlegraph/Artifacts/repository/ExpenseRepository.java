@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     List<Expense> findByGroupIdOrderByExpenseDateDesc(Long groupId);
+    List<Expense> findByRecurringTrue();
+    boolean existsByRecurringSourceIdAndRecurrencePeriod(Long recurringSourceId, String recurrencePeriod);
 }

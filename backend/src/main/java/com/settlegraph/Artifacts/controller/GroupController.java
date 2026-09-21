@@ -25,7 +25,7 @@ public class GroupController {
     }
 
     @PostMapping
-    public ResponseEntity<Group> createGroup(@RequestBody CreateGroupRequest request,
+    public ResponseEntity<Group> createGroup(@Valid @RequestBody CreateGroupRequest request,
                                               @AuthenticationPrincipal AuthenticatedUser user) {
         return ResponseEntity.ok(groupService.createGroup(request, user.getUserId()));
     }
@@ -36,13 +36,15 @@ public class GroupController {
     }
 
     @GetMapping("/{groupId}")
-    public ResponseEntity<Group> getGroup(@PathVariable Long groupId) {
-        return ResponseEntity.ok(groupService.getGroup(groupId));
+    public ResponseEntity<Group> getGroup(@PathVariable Long groupId,
+                                          @AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok(groupService.getGroup(groupId, user.getUserId()));
     }
 
     @GetMapping("/{groupId}/members")
-    public ResponseEntity<List<GroupMemberResponse>> getMembers(@PathVariable Long groupId) {
-        return ResponseEntity.ok(groupService.getMembersWithDetails(groupId));
+    public ResponseEntity<List<GroupMemberResponse>> getMembers(@PathVariable Long groupId,
+                                                                @AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok(groupService.getMembersWithDetails(groupId, user.getUserId()));
     }
 
     @PostMapping("/{groupId}/invites")
@@ -53,7 +55,8 @@ public class GroupController {
     }
 
     @GetMapping("/{groupId}/invites")
-    public ResponseEntity<List<GroupInviteResponse>> getGroupInvites(@PathVariable Long groupId) {
-        return ResponseEntity.ok(groupService.getInvitesForGroup(groupId));
+    public ResponseEntity<List<GroupInviteResponse>> getGroupInvites(@PathVariable Long groupId,
+                                                                     @AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok(groupService.getInvitesForGroup(groupId, user.getUserId()));
     }
 }

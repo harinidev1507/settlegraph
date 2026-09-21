@@ -1,6 +1,7 @@
 package com.settlegraph.Artifacts.config;
 
 import com.settlegraph.Artifacts.security.JwtAuthFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -21,9 +22,12 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final List<String> allowedOrigins;
 
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+    public SecurityConfig(JwtAuthFilter jwtAuthFilter,
+                          @Value("${settlegraph.cors.allowed-origins}") List<String> allowedOrigins) {
         this.jwtAuthFilter = jwtAuthFilter;
+        this.allowedOrigins = allowedOrigins;
     }
 
     // BCrypt: a one-way hashing algorithm for passwords. We never store the
@@ -49,12 +53,14 @@ public class SecurityConfig {
         return http.build();
     }
 
-    // Allows your React frontend (running on a different port during
-    // development) to actually call this API from the browser.
+    // Allows the React frontend (a different origin — different port in dev,
+    // different host in prod) to call this API from the browser. Only the
+    // configured origin(s) are allowed: a wildcard here would let any website
+    // a logged-in user visits fire requests at this API from their browser.
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
+        config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

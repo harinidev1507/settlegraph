@@ -4,6 +4,8 @@ import com.settlegraph.Artifacts.dto.CreateExpenseRequest;
 import com.settlegraph.Artifacts.entity.AuditLog;
 import com.settlegraph.Artifacts.entity.Expense;
 import com.settlegraph.Artifacts.entity.ExpenseSplit;
+import com.settlegraph.Artifacts.entity.RecurrenceFrequency;
+import com.settlegraph.Artifacts.exception.NotFoundException;
 import com.settlegraph.Artifacts.repository.AuditLogRepository;
 import com.settlegraph.Artifacts.repository.ExpenseRepository;
 import com.settlegraph.Artifacts.repository.ExpenseSplitRepository;
@@ -48,13 +50,13 @@ public class ExpenseService {
      * succeed, or neither does. This matters: an expense that exists without
      * any splits attached would silently break every balance calculation
      * that reads it later.
+     *
+     * Order matters too: membership check, then every validation, and only
+     * then the first write. A rejected request never touches the database.
      */
     @Transactional
     public Expense addExpense(CreateExpenseRequest request, Long paidByUserId) {
-        Expense expense = new Expense(
-                request.getGroupId(), paidByUserId, request.getAmount(),
-                request.getCurrency(), request.getCategory(), request.getDescription());
-        expense = expenseRepository.save(expense);
+        groupAccessGuard.requireMember(request.getGroupId(), paidByUserId);
 
         Map<Long, BigDecimal> shares = calculateShares(request);
 
@@ -76,12 +78,29 @@ public class ExpenseService {
                     "Split amounts (" + total + ") do not add up to the expense total (" + request.getAmount() + ")");
         }
 
+        // A recurring expense is a normal expense (this month's) that also acts
+        // as the template the scheduler copies each following month.
+        if (request.isRecurring() && request.getRecurrenceFrequency() == null) {
+            throw new IllegalArgumentException("A recurring expense needs a recurrenceFrequency (MONTHLY)");
+        }
+        if (!request.isRecurring() && request.getRecurrenceFrequency() != null) {
+            throw new IllegalArgumentException("recurrenceFrequency only applies when recurring is true");
+        }
+
+        Expense expense = new Expense(
+                request.getGroupId(), paidByUserId, request.getAmount(),
+                request.getCurrency(), request.getCategory(), request.getDescription());
+        expense.setRecurring(request.isRecurring());
+        expense.setRecurrenceFrequency(request.getRecurrenceFrequency());
+        expense = expenseRepository.save(expense);
+
         for (Map.Entry<Long, BigDecimal> entry : shares.entrySet()) {
             expenseSplitRepository.save(new ExpenseSplit(expense.getId(), entry.getKey(), entry.getValue()));
         }
 
+        String kind = request.isRecurring() ? "recurring expense" : "expense";
         auditLogRepository.save(new AuditLog(request.getGroupId(), paidByUserId,
-                "Added expense \"" + request.getDescription() + "\" for " + request.getAmount()));
+                "Added " + kind + " \"" + request.getDescription() + "\" for " + request.getAmount()));
 
         // Notify every OTHER member of the group. The person who added the
         // expense already knows they did it — they don't get a notification
@@ -89,7 +108,7 @@ public class ExpenseService {
         for (Long memberId : memberIds) {
             if (!memberId.equals(paidByUserId)) {
                 notificationService.create(memberId,
-                        "New expense \"" + request.getDescription() + "\" for "
+                        "New " + kind + " \"" + request.getDescription() + "\" for "
                                 + request.getAmount() + " was added");
             }
         }
@@ -97,8 +116,45 @@ public class ExpenseService {
         return expense;
     }
 
+    /**
+     * Turns a recurring template off: it stays as the ordinary expense it
+     * already is, but the scheduler stops generating new months from it.
+     * Occurrences already generated are real expenses and are kept.
+     */
+    @Transactional
+    public Expense stopRecurring(Long expenseId, Long requestingUserId) {
+        Expense expense = expenseRepository.findById(expenseId)
+                .orElseThrow(() -> new NotFoundException("Expense not found"));
+        groupAccessGuard.requireMember(expense.getGroupId(), requestingUserId);
+
+        if (!expense.isRecurring()) {
+            throw new IllegalArgumentException("This expense is not recurring");
+        }
+
+        expense.setRecurring(false);
+        expense = expenseRepository.save(expense);
+
+        auditLogRepository.save(new AuditLog(expense.getGroupId(), requestingUserId,
+                "Stopped recurring expense \"" + expense.getDescription() + "\""));
+
+        return expense;
+    }
+
     private Map<Long, BigDecimal> calculateShares(CreateExpenseRequest request) {
         String splitType = request.getSplitType() == null ? "EQUAL" : request.getSplitType().toUpperCase();
+
+        if (!splitType.equals("EQUAL")) {
+            Map<Long, BigDecimal> splits = request.getSplits();
+            if (splits == null || splits.isEmpty()) {
+                throw new IllegalArgumentException(splitType + " split requires a non-empty splits map");
+            }
+            for (var entry : splits.entrySet()) {
+                if (entry.getValue() == null || entry.getValue().signum() <= 0) {
+                    throw new IllegalArgumentException(
+                            "Split value for user " + entry.getKey() + " must be greater than zero");
+                }
+            }
+        }
 
         return switch (splitType) {
             case "EXACT" -> request.getSplits();
@@ -127,7 +183,7 @@ public class ExpenseService {
                 yield result;
             }
 
-            default -> { // EQUAL
+            case "EQUAL" -> {
                 // Split across an explicit participant list supplied by the caller.
                 // We deliberately do NOT fall back to "all current group members":
                 // that made an expense's split depend on when it was entered
@@ -146,6 +202,9 @@ public class ExpenseService {
                 }
                 yield result;
             }
+
+            default -> throw new IllegalArgumentException(
+                    "Unknown splitType: " + splitType + " (expected EQUAL, EXACT, PERCENTAGE or SHARES)");
         };
     }
 
