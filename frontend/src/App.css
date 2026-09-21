@@ -396,3 +396,48 @@ button + .settlement-list { margin-top: 16px; }
   .audit-log-list li { flex-direction: column; gap: 4px; }
   .audit-time { align-self: flex-start; }
 }
+
+/* --- Add expense: recurring checkbox ------------------------------------ */
+.checkbox-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  font-size: 14px; font-weight: 500; cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--gold); flex-shrink: 0; }
+.checkbox-row .muted { font-weight: 400; }
+
+/* --- Expense rows: category / payer / recurring ------------------------- */
+.expense-list li { flex-wrap: wrap; }
+.expense-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 180px; }
+.expense-meta { font-size: 12px; }
+.status-badge.recurring { background: var(--cream-alt); color: var(--gold-dark); }
+
+/* --- Spending breakdown (single-hue bar list) --------------------------- */
+.analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }
+.bar-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.bar-list li {
+  display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: 12px;
+  font-size: 14px; border: none; padding: 0;
+}
+.bar-label { font-weight: 500; color: var(--espresso-dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { display: block; height: 10px; background: var(--cream-alt); border-radius: 4px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: var(--gold); border-radius: 0 4px 4px 0; transition: width 240ms ease; }
+.bar-value { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--espresso-dark); white-space: nowrap; }
+.bar-value .muted { font-weight: 400; margin-left: 4px; }
+
+/* --- Notifications ------------------------------------------------------- */
+.section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+.section-head h2 { margin: 0; display: flex; align-items: center; gap: 10px; }
+.count-badge {
+  font-family: var(--font-body); font-size: 12px; font-weight: 700;
+  background: var(--rose-soft); color: #A44636;
+  border-radius: 999px; padding: 2px 9px; line-height: 1.4;
+}
+.notification-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.notification-list li {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--cream);
+}
+.notification-list li.is-unread { border-left: 3px solid var(--gold); }
+.notification-list li.is-read { opacity: 0.7; }
+.notification-list li.muted { border: none; padding: 0; background: transparent; }
+.notification-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 200px; font-size: 14px; }

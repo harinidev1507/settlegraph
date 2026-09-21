@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { getBalances, getGroup, getGroupMembers } from "../api/groups";
-import { getExpensesForGroup } from "../api/expenses";
+import { getExpensesForGroup, stopRecurring } from "../api/expenses";
 import { generateSettlementPlan, getSettlements, markSettlementPaid } from "../api/settlements";
 import { getGroupInvites } from "../api/invites";
 import AddExpenseForm from "../components/AddExpenseForm";
 import InviteMemberForm from "../components/InviteMemberForm";
 import AuditLogSection from "../components/AuditLogSection";
+import AnalyticsSection from "../components/AnalyticsSection";
 
 export default function GroupDetailPage() {
   const { groupId } = useParams();
@@ -16,6 +17,9 @@ export default function GroupDetailPage() {
   const [settlements, setSettlements] = useState([]);
   const [members, setMembers] = useState([]);
   const [groupInvites, setGroupInvites] = useState([]);
+  const [error, setError] = useState("");
+  // Bumped on every reload so the (lazy) analytics section knows to refetch.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   async function loadAll() {
     const [g, b, e, s, m, i] = await Promise.all([
@@ -32,6 +36,7 @@ export default function GroupDetailPage() {
     setSettlements(s);
     setMembers(m);
     setGroupInvites(i);
+    setRefreshKey((k) => k + 1);
   }
 
   useEffect(() => { loadAll(); }, [groupId]);
@@ -49,6 +54,16 @@ export default function GroupDetailPage() {
   async function handleMarkPaid(settlementId) {
     await markSettlementPaid(groupId, settlementId);
     loadAll();
+  }
+
+  async function handleStopRecurring(expenseId) {
+    setError("");
+    try {
+      await stopRecurring(expenseId);
+      loadAll();
+    } catch (err) {
+      setError(err.response?.data?.error || "Could not stop the recurring expense");
+    }
   }
 
   return (
@@ -113,16 +128,31 @@ export default function GroupDetailPage() {
       <section>
         <span className="eyebrow">History</span>
         <h2>Expenses</h2>
+        {error && <p className="error">{error}</p>}
         <ul className="expense-list">
           {expenses.map((e) => (
             <li key={e.id}>
-              <span>{e.description}</span>
+              <span className="expense-main">
+                <span>{e.description}</span>
+                <span className="muted expense-meta">
+                  {e.category || "Uncategorized"} · paid by {memberName(e.paidBy)}
+                  {e.recurringSourceId && " · auto-added"}
+                </span>
+              </span>
+              {e.recurring && <span className="status-badge recurring">MONTHLY</span>}
               <span className="amount">{e.amount} {e.currency}</span>
+              {e.recurring && (
+                <button className="btn-ghost btn-small" onClick={() => handleStopRecurring(e.id)}>
+                  Stop repeating
+                </button>
+              )}
             </li>
           ))}
           {expenses.length === 0 && <li className="muted">No expenses logged yet.</li>}
         </ul>
       </section>
+
+      <AnalyticsSection groupId={groupId} refreshKey={refreshKey} />
 
       <section>
         <span className="eyebrow">Wrap it up</span>

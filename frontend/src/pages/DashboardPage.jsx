@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { getMyGroups, createGroup } from "../api/groups";
 import { getMyInvites, acceptInvite, declineInvite } from "../api/invites";
 import { useAuth } from "../context/AuthContext";
+import NotificationsSection from "../components/NotificationsSection";
 
 export default function DashboardPage() {
   const [groups, setGroups] = useState([]);
@@ -48,6 +49,8 @@ export default function DashboardPage() {
         </div>
         <button className="btn-ghost" onClick={logout}>Log out</button>
       </div>
+
+      <NotificationsSection />
 
       <section>
         <span className="eyebrow">Waiting on you</span>
