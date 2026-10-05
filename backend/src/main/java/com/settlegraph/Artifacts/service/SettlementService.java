@@ -3,7 +3,6 @@ package com.settlegraph.Artifacts.service;
 import com.settlegraph.Artifacts.entity.AuditLog;
 import com.settlegraph.Artifacts.entity.Settlement;
 import com.settlegraph.Artifacts.entity.User;
-import com.settlegraph.Artifacts.exception.ForbiddenException;
 import com.settlegraph.Artifacts.exception.NotFoundException;
 import com.settlegraph.Artifacts.repository.AuditLogRepository;
 import com.settlegraph.Artifacts.repository.SettlementRepository;
@@ -13,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -94,30 +94,35 @@ public class SettlementService {
         return settlementRepository.findByGroupId(groupId);
     }
 
+    /**
+     * Authorization first, against the group in the request path, before the
+     * settlement is even loaded. (Settlement participants are always group
+     * members — there is no leave/remove-member flow — so the membership
+     * check alone covers them.)
+     *
+     * The PENDING -> PAID transition is a conditional UPDATE rather than
+     * read-check-save, so two concurrent requests can't both succeed and
+     * write two audit rows; whichever loses gets a 400.
+     */
     @Transactional
     public Settlement markPaid(Long groupId, Long settlementId, Long performedByUserId) {
-        Settlement settlement = settlementRepository.findById(settlementId)
+        groupAccessGuard.requireMember(groupId, performedByUserId);
+
+        // Scoped to the group in the path: a settlement belonging to another
+        // group is never read, and gets the same 404 as one that doesn't
+        // exist — so its existence can't be probed from outside that group.
+        Settlement settlement = settlementRepository.findByIdAndGroupId(settlementId, groupId)
                 .orElseThrow(() -> new NotFoundException("Settlement not found"));
 
-        // The settlement must actually live under the group in the request path.
-        if (!settlement.getGroupId().equals(groupId)) {
-            throw new NotFoundException("Settlement not found in this group");
+        if (settlementRepository.markPaidIfPending(settlementId, LocalDateTime.now()) == 0) {
+            throw new IllegalArgumentException("This settlement has already been marked as paid");
         }
 
-        // Only the two people in the settlement, or a member of its group, may settle it.
-        boolean isParticipant = performedByUserId.equals(settlement.getFromUserId())
-                || performedByUserId.equals(settlement.getToUserId());
-        boolean isGroupMember = groupAccessGuard.isMember(settlement.getGroupId(), performedByUserId);
-        if (!isParticipant && !isGroupMember) {
-            throw new ForbiddenException("You are not allowed to settle this payment");
-        }
-
-        settlement.markPaid();
-        settlement = settlementRepository.save(settlement);
-
-        auditLogRepository.save(new AuditLog(settlement.getGroupId(), performedByUserId,
+        auditLogRepository.save(new AuditLog(groupId, performedByUserId,
                 "Marked settlement of " + settlement.getAmount() + " as paid"));
 
-        return settlement;
+        // The UPDATE cleared the persistence context; re-read the committed state.
+        return settlementRepository.findById(settlementId)
+                .orElseThrow(() -> new NotFoundException("Settlement not found"));
     }
 }

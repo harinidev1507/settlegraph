@@ -2,6 +2,8 @@ package com.settlegraph.Artifacts.service;
 
 import com.settlegraph.Artifacts.entity.Settlement;
 import com.settlegraph.Artifacts.entity.User;
+import com.settlegraph.Artifacts.exception.ForbiddenException;
+import com.settlegraph.Artifacts.exception.NotFoundException;
 import com.settlegraph.Artifacts.repository.AuditLogRepository;
 import com.settlegraph.Artifacts.repository.SettlementRepository;
 import com.settlegraph.Artifacts.repository.UserRepository;
@@ -16,14 +18,19 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Unit tests for {@link SettlementService#generateSettlementPlan}:
@@ -32,6 +39,11 @@ import static org.mockito.Mockito.when;
  *     stack up duplicate rows
  *   - the notification fan-out: BOTH sides of every settlement in the plan get
  *     a notification — one per obligation, worded for that person's role
+ * and {@link SettlementService#markPaid}: authorization before any read, a
+ * settlement in another group looks exactly like a missing one, and an
+ * already-PAID settlement is rejected without a second audit row. (The
+ * concurrent case depends on the real conditional UPDATE — verified against
+ * Postgres, not here.)
  *
  * The settlement repository is backed by a tiny in-memory list so that save /
  * deleteByGroupIdAndStatus actually interact. Other collaborators are mocked —
@@ -47,6 +59,8 @@ class SettlementServiceTest {
     private List<Settlement> store;
     private SettlementRepository settlementRepository;
     private NotificationService notificationService;
+    private GroupAccessGuard groupAccessGuard;
+    private AuditLogRepository auditLogRepository;
     private SettlementService settlementService;
 
     @BeforeEach
@@ -55,8 +69,8 @@ class SettlementServiceTest {
 
         BalanceService balanceService = mock(BalanceService.class);
         settlementRepository = mock(SettlementRepository.class);
-        AuditLogRepository auditLogRepository = mock(AuditLogRepository.class);
-        GroupAccessGuard groupAccessGuard = mock(GroupAccessGuard.class);
+        auditLogRepository = mock(AuditLogRepository.class);
+        groupAccessGuard = mock(GroupAccessGuard.class);
         notificationService = mock(NotificationService.class);
         UserRepository userRepository = mock(UserRepository.class);
         // The debt-simplification algorithm has no external deps — use the real one.
@@ -128,5 +142,83 @@ class SettlementServiceTest {
 
         // Exactly two notifications for a one-settlement plan — one per side, not one.
         verify(notificationService, times(2)).create(any(), anyString());
+    }
+
+    // ---- markPaid ----
+
+    private static final Long SETTLEMENT_ID = 500L;
+    private static final Long OUTSIDER = 99L;
+
+    /** Stubs the group-scoped lookup; any other (id, group) pair finds nothing, like the real query. */
+    private Settlement pendingSettlementIn(Long groupId) {
+        Settlement s = new Settlement(groupId, BOB, ALICE, new BigDecimal("50.00"));
+        when(settlementRepository.findByIdAndGroupId(SETTLEMENT_ID, groupId)).thenReturn(Optional.of(s));
+        return s;
+    }
+
+    @Test
+    void markPaid_byNonMember_isRejectedBeforeTheSettlementIsLoaded() {
+        pendingSettlementIn(GROUP);
+        doThrow(new ForbiddenException("You are not a member of this group"))
+                .when(groupAccessGuard).requireMember(GROUP, OUTSIDER);
+
+        assertThrows(ForbiddenException.class,
+                () -> settlementService.markPaid(GROUP, SETTLEMENT_ID, OUTSIDER));
+
+        // Rejected before the settlement row was even read, let alone changed.
+        verify(settlementRepository, never()).findByIdAndGroupId(any(), any());
+        verify(settlementRepository, never()).findById(any());
+        verify(settlementRepository, never()).markPaidIfPending(any(), any());
+        verifyNoInteractions(auditLogRepository);
+    }
+
+    @Test
+    void markPaid_onAPendingSettlement_transitionsIt_auditsOnce_andReturnsTheReReadRow() {
+        pendingSettlementIn(GROUP);
+        when(settlementRepository.markPaidIfPending(eq(SETTLEMENT_ID), any())).thenReturn(1);
+        // The UPDATE clears the persistence context, so the service must hand back
+        // a fresh read of the committed row — not the stale PENDING instance.
+        Settlement committed = new Settlement(GROUP, BOB, ALICE, new BigDecimal("50.00"));
+        committed.markPaid();
+        when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(committed));
+
+        Settlement result = settlementService.markPaid(GROUP, SETTLEMENT_ID, BOB);
+
+        assertSame(committed, result);
+        assertEquals(Settlement.Status.PAID, result.getStatus());
+        verify(groupAccessGuard).requireMember(GROUP, BOB);
+        verify(settlementRepository).markPaidIfPending(eq(SETTLEMENT_ID), any());
+        verify(auditLogRepository, times(1)).save(any());
+    }
+
+    @Test
+    void markPaid_onAnAlreadyPaidSettlement_isRejected_andWritesNoAuditRow() {
+        // Audit bug 4: used to return 200 again and write a second audit row.
+        // The conditional UPDATE changing 0 rows is what "already PAID" looks like.
+        pendingSettlementIn(GROUP);
+        when(settlementRepository.markPaidIfPending(eq(SETTLEMENT_ID), any())).thenReturn(0);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> settlementService.markPaid(GROUP, SETTLEMENT_ID, BOB));
+
+        verifyNoInteractions(auditLogRepository);
+        verify(settlementRepository, never()).save(any());
+    }
+
+    @Test
+    void markPaid_settlementFromAnotherGroup_looksExactlyLikeAMissingOne_andNothingIsChanged() {
+        pendingSettlementIn(777L); // lives in a different group than the path says
+
+        NotFoundException otherGroup = assertThrows(NotFoundException.class,
+                () -> settlementService.markPaid(GROUP, SETTLEMENT_ID, BOB));
+        NotFoundException missing = assertThrows(NotFoundException.class,
+                () -> settlementService.markPaid(GROUP, 12345L, BOB));
+
+        // Same message, so a member of GROUP can't probe whether an ID exists elsewhere.
+        assertEquals(missing.getMessage(), otherGroup.getMessage());
+        // Only the group-scoped lookup is used — never an unscoped read of another group's row.
+        verify(settlementRepository, never()).findById(any());
+        verify(settlementRepository, never()).markPaidIfPending(any(), any());
+        verifyNoInteractions(auditLogRepository);
     }
 }

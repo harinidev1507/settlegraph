@@ -76,3 +76,9 @@ or silently ignored. Dates are absolute.
   `403 Invalid CORS request`. Then in a real browser at `localhost:5173`: login, open
   group 6, add an EQUAL expense — every request 200, all preflights 200, zero console
   errors.
+- **2026-10-06 — `markPaid` conditional UPDATE under concurrency.** Against the local
+  Postgres via the live API: 20 concurrent `PATCH …/mark-paid` on one PENDING
+  settlement → `{200: 1, 400: 19}`, exactly one "Marked settlement…" audit row, status
+  PAID once. A sequential second call → 400. A settlement ID from another group and a
+  nonexistent ID both → `404 Settlement not found`. The unit tests stub the UPDATE's
+  row count; only this run exercises the real row lock. No automated DB test exists.
