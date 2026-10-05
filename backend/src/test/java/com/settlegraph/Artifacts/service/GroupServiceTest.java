@@ -1,5 +1,8 @@
 package com.settlegraph.Artifacts.service;
 
+import com.settlegraph.Artifacts.dto.CreateGroupRequest;
+import com.settlegraph.Artifacts.entity.Group;
+import com.settlegraph.Artifacts.entity.GroupMember;
 import com.settlegraph.Artifacts.exception.ForbiddenException;
 import com.settlegraph.Artifacts.repository.AuditLogRepository;
 import com.settlegraph.Artifacts.repository.GroupInviteRepository;
@@ -9,17 +12,25 @@ import com.settlegraph.Artifacts.repository.UserRepository;
 import com.settlegraph.Artifacts.security.GroupAccessGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /**
  * Group reads carry member usernames/emails and pending invites, so they are
  * only visible to members. Each test proves a non-member is rejected BEFORE
  * any repository is touched — not just that an error eventually happened.
+ * createGroup is also covered: nobody but the creator joins without an invite.
  */
 class GroupServiceTest {
 
@@ -68,5 +79,43 @@ class GroupServiceTest {
     void inviteMember_byNonMember_isRejectedBeforeAnyLookup() {
         assertThrows(ForbiddenException.class, () -> groupService.inviteMember(GROUP, OUTSIDER, "someone"));
         verifyNoInteractions(userRepository, groupInviteRepository);
+    }
+
+    // ---- createGroup: the only way in besides creating is an accepted invite ----
+
+    private static final Long CREATOR = 5L;
+
+    private CreateGroupRequest createRequest(List<Long> memberUserIds) {
+        CreateGroupRequest request = new CreateGroupRequest();
+        request.setName("Goa Trip");
+        request.setMemberUserIds(memberUserIds);
+        return request;
+    }
+
+    @Test
+    void createGroup_withANonexistentMemberUserId_isRejectedAs400_andNothingIsWritten() {
+        // Audit bug 3: used to reach the member insert and fail on the FK -> 500.
+        assertThrows(IllegalArgumentException.class,
+                () -> groupService.createGroup(createRequest(List.of(99_999_999L)), CREATOR));
+        verifyNoInteractions(groupRepository, groupMemberRepository, userRepository);
+    }
+
+    @Test
+    void createGroup_withARealMemberUserId_isRejected_soNoOneIsAddedWithoutAnInvite() {
+        // Audit bug 3: used to add user 6 as a member with no invite and no consent.
+        assertThrows(IllegalArgumentException.class,
+                () -> groupService.createGroup(createRequest(List.of(6L)), CREATOR));
+        verifyNoInteractions(groupRepository, groupMemberRepository);
+    }
+
+    @Test
+    void createGroup_withAnEmptyMemberList_createsTheGroupWithOnlyTheCreatorAsMember() {
+        when(groupRepository.save(any(Group.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        groupService.createGroup(createRequest(List.of()), CREATOR);
+
+        ArgumentCaptor<GroupMember> member = ArgumentCaptor.forClass(GroupMember.class);
+        verify(groupMemberRepository, times(1)).save(member.capture());
+        assertEquals(CREATOR, member.getValue().getId().getUserId());
     }
 }

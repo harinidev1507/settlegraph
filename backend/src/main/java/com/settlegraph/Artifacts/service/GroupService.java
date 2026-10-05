@@ -50,19 +50,20 @@ public class GroupService {
 
     @Transactional
     public Group createGroup(CreateGroupRequest request, Long creatorUserId) {
+        // Every membership other than the creator's goes through an accepted
+        // invite. memberUserIds used to add people directly, without their
+        // consent (and a nonexistent ID was a 500). The field is kept so an old
+        // client gets a clear 400 rather than having it silently ignored.
+        if (request.getMemberUserIds() != null && !request.getMemberUserIds().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "memberUserIds is not supported — create the group, then invite members by username");
+        }
+
         Group group = new Group(request.getName(), creatorUserId);
         group = groupRepository.save(group);
 
-        // The creator is always a member.
+        // The creator is always a member, and the only one at creation.
         groupMemberRepository.save(new GroupMember(creatorUserId, group.getId()));
-
-        if (request.getMemberUserIds() != null) {
-            for (Long memberId : request.getMemberUserIds()) {
-                if (!memberId.equals(creatorUserId)) {
-                    groupMemberRepository.save(new GroupMember(memberId, group.getId()));
-                }
-            }
-        }
 
         auditLogRepository.save(new AuditLog(group.getId(), creatorUserId,
                 "Created group \"" + group.getName() + "\""));

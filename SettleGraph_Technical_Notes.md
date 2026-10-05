@@ -36,10 +36,11 @@ or silently ignored. Dates are absolute.
   Widen the catch to `RuntimeException` with an ERROR log if that ever bites.
 - **No rate limiting, load balancing, caching, message queues.** Single-instance app;
   intentionally kept out (decision 2026-09-21).
-- **`createGroup` still accepts `memberUserIds`** and adds those users as members
-  without an invite/consent step. The frontend always sends `[]`; the invite → accept
-  flow is the intended path. Left in place to avoid an API break; recommend removing
-  the field so every membership goes through an accepted invite.
+- **`createGroup` rejects a non-empty `memberUserIds` with 400** (since 2026-10-06).
+  It used to add those users directly, without an invite or consent, and a nonexistent
+  ID was a 500. Every membership other than the creator's now goes through an accepted
+  invite. The field is kept rather than removed because Spring ignores unknown JSON
+  fields — removing it would turn the 400 into a silent 200. Empty or omitted is fine.
 - **Entities are returned directly as JSON** (`Expense`, `Settlement`, `Group`,
   `AuditLog`, `Notification`). Fine for now; introduce response DTOs before adding
   fields that shouldn't leave the server.
@@ -51,11 +52,14 @@ or silently ignored. Dates are absolute.
   platform needs an HTTP health check.
 - No edit/delete for expenses or settlements. Corrections today mean adding a
   compensating expense.
-- No frontend tests and no CI. The backend has 41 service-layer tests; the React side
+- No frontend tests and no CI. The backend has 57 service-layer tests; the React side
   has none, and nothing runs `mvn test` / `npm run build` on push.
 - Page-level `loadAll()` calls in `DashboardPage` / `GroupDetailPage` have no error
   handling, so a 403 or an expired JWT leaves sections blank instead of redirecting to
   login.
+- Any group member can mark any settlement paid, not only its creditor (unchanged by
+  the 2026-10-06 `markPaid` fix). Open question: should only the creditor confirm a
+  payment was received?
 - `GET /api/groups/{id}/members` exposes member emails to other members. Acceptable
   for a small-group app; reconsider if groups become large/public.
 - `JwtService` secret default in `application.yml` is a placeholder; production must
