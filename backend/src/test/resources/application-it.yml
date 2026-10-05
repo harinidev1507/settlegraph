@@ -1,0 +1,7 @@
+# Profile for *IT.java integration tests (activated by IntegrationTestSupport).
+# Points at the dedicated local test database, never the dev database:
+# IntegrationTestSupport truncates every table before each test, and refuses
+# to unless the connected database is settlegraph_test.
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/settlegraph_test

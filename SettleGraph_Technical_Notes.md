@@ -52,11 +52,19 @@ or silently ignored. Dates are absolute.
   platform needs an HTTP health check.
 - No edit/delete for expenses or settlements. Corrections today mean adding a
   compensating expense.
-- No frontend tests and no CI. The backend has 63 service-layer tests; the React side
+- No frontend tests and no CI. The backend has 89 unit tests (`mvn test`) and 63
+  integration tests against a real Postgres (`mvn verify`); the React side
   has none, and nothing runs `mvn test` / `npm run build` on push.
 - Page-level `loadAll()` calls in `DashboardPage` / `GroupDetailPage` have no error
-  handling, so a 403 or an expired JWT leaves sections blank instead of redirecting to
-  login.
+  handling. Since 2026-10-06 an expired/invalid JWT is a 401 and the axios interceptor
+  clears the session and redirects to login, but a 403 (e.g. opening a group you're not
+  in) still leaves the page stuck on "Loading…" with blank sections.
+- **Email uniqueness is case-sensitive.** `AuthService.register` checks
+  `existsByEmail` on the raw string (usernames, by contrast, are lowercased), so
+  `Alice@x.com` and `alice@x.com` can register as two accounts, and login by email is
+  an exact match. Recorded 2026-10-06, not fixed and deliberately not locked in by a
+  test; a fix would lowercase on register + login and add a unique index on
+  `lower(email)` (existing duplicates would need checking first).
 - **Allocation can store 0.00 shares.** When an amount has fewer cents than
   participants (EQUAL 0.01 among 12), most participants get a 0.00 `expense_split` row;
   `share_amount` has no CHECK constraint. Balances stay correct (sum exactly zero), but
@@ -92,3 +100,10 @@ or silently ignored. Dates are absolute.
   PAID once. A sequential second call → 400. A settlement ID from another group and a
   nonexistent ID both → `404 Settlement not found`. The unit tests stub the UPDATE's
   row count; only this run exercises the real row lock. No automated DB test exists.
+- **2026-10-06 — 401 + frontend redirect, in a real browser.** Logged in through the UI
+  (both `settlegraph_token` and `settlegraph_user` in localStorage), then restarted the
+  backend with a different `JWT_SECRET` so the stored token was invalid. Reloading
+  `/dashboard`: `GET /api/groups`, `/api/notifications`, `/api/invites/mine` → 401, the
+  page landed on `/login`, and localStorage was empty (both keys `null`). Stayed on
+  `/login` with no redirect loop; logging in again worked. Also: `SecurityIT` run
+  against the previous `SecurityConfig` failed 25/27 with `expected:<401> but was:<403>`.

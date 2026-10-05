@@ -31,7 +31,9 @@ Financial/data-integrity rules
 
 Testing conventions
 
-* Follow the existing style: plain JUnit + Mockito, no Spring context, no real database, for service-layer unit tests (see `BalanceServiceTest`, `SettlementServiceTest` as reference examples).
+* Service-layer tests use plain JUnit + Mockito, no Spring context, no real database (see `BalanceServiceTest`, `SettlementServiceTest` as reference examples).
+* Controller and security tests use `@SpringBootTest` + MockMvc, because the security filter chain only exists inside Spring's request pipeline — mocking around it would test nothing. That is a reason to use Spring for this layer, not a reason to skip testing it.
+* Keep the Spring-context tests separate from the service tests so the fast suite stays fast: they live in `*IT.java` classes, run by `mvn verify`, while `mvn test` runs only the plain unit tests.
 * Name tests to describe the specific behavior being locked in (e.g. `generatingTwiceWithUnchangedBalances_leavesExactlyOnePendingSettlement`), not generic names like `testGenerate1`.
 * When a real bug is found (through manual testing or otherwise), write a regression test for it as part of the fix — the fix isn't considered complete until a test exists that would fail if the bug came back.
 

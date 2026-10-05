@@ -147,12 +147,12 @@ public class GroupService {
 
     @Transactional
     public GroupInviteResponse respondToInvite(Long inviteId, Long respondingUserId, boolean accept) {
-        GroupInvite invite = groupInviteRepository.findById(inviteId)
+        // Scoped to the responding user: someone else's invite is never read and
+        // gets the same 404 as a missing one, so invite IDs can't be probed (a
+        // 403 would confirm the invite exists). Same approach as markPaid.
+        GroupInvite invite = groupInviteRepository.findByIdAndInvitedUserId(inviteId, respondingUserId)
                 .orElseThrow(() -> new NotFoundException("Invite not found"));
 
-        if (!invite.getInvitedUserId().equals(respondingUserId)) {
-            throw new IllegalArgumentException("This invite isn't yours to respond to");
-        }
         if (invite.getStatus() != GroupInvite.Status.PENDING) {
             throw new IllegalArgumentException("This invite has already been responded to");
         }

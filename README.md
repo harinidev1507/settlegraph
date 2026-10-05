@@ -94,16 +94,31 @@ You should get back a JSON response with a `token`. Log in with
 
 ```bash
 cd backend
-mvn test
+mvn test     # 89 unit tests: fast, no database, no Spring context
+mvn verify   # the 89 above + 63 integration tests against a real Postgres
 ```
 
-63 service-layer tests (plain JUnit + Mockito, no Spring context, no database). They
-cover the debt-simplification algorithm, balance netting, settlement idempotency, split
-validation and exact cent allocation (including a 612-case sweep and the "group balances
-sum to exactly zero" invariant across every split type), mark-paid rejection of
-already-PAID settlements, group creation only via invites, the recurring-expense
-scheduler (including one template's failure not affecting another), and that every
-membership check rejects a non-member *before* touching any data.
+**Unit tests (`mvn test`)** — plain JUnit + Mockito. They cover the debt-simplification
+algorithm, balance netting, settlement idempotency, split validation and exact cent
+allocation (including a 612-case sweep and the "group balances sum to exactly zero"
+invariant across every split type), mark-paid rejection of already-PAID settlements,
+invites and group creation only via invites, registration/login (real BCrypt and JWT),
+JWT validation (expired, malformed, wrong-secret, tampered, unsigned tokens), the auth
+filter, the recurring-expense scheduler, and that every membership check rejects a
+non-member *before* touching any data.
+
+**Integration tests (`*IT.java`, run by `mvn verify`)** — `@SpringBootTest` + MockMvc
+through the real security filter chain against a dedicated local database, which must
+exist first:
+
+```bash
+createdb -U postgres settlegraph_test   # once; Flyway migrates it on first run
+```
+
+Every table in `settlegraph_test` is truncated before each test (the tests refuse to run
+against any other database). They check that every endpoint returns 401 without a valid
+token, 403 for a non-member and 200 for a member, and one full money flow — group,
+expense, stored splits, settlement, mark paid — ending with every balance exactly zero.
 
 ## Configuration
 
