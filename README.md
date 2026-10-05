@@ -97,12 +97,13 @@ cd backend
 mvn test
 ```
 
-57 service-layer tests (plain JUnit + Mockito, no Spring context, no database). They
-cover the debt-simplification algorithm, balance netting, settlement idempotency,
-split validation and exact cent allocation, mark-paid rejection of already-PAID
-settlements, group creation only via invites, the recurring-expense scheduler
-(including one template's failure not affecting another), and that every membership check rejects a non-member *before*
-touching any data.
+63 service-layer tests (plain JUnit + Mockito, no Spring context, no database). They
+cover the debt-simplification algorithm, balance netting, settlement idempotency, split
+validation and exact cent allocation (including a 612-case sweep and the "group balances
+sum to exactly zero" invariant across every split type), mark-paid rejection of
+already-PAID settlements, group creation only via invites, the recurring-expense
+scheduler (including one template's failure not affecting another), and that every
+membership check rejects a non-member *before* touching any data.
 
 ## Configuration
 

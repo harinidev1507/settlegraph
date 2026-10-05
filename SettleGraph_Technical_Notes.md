@@ -52,11 +52,17 @@ or silently ignored. Dates are absolute.
   platform needs an HTTP health check.
 - No edit/delete for expenses or settlements. Corrections today mean adding a
   compensating expense.
-- No frontend tests and no CI. The backend has 57 service-layer tests; the React side
+- No frontend tests and no CI. The backend has 63 service-layer tests; the React side
   has none, and nothing runs `mvn test` / `npm run build` on push.
 - Page-level `loadAll()` calls in `DashboardPage` / `GroupDetailPage` have no error
   handling, so a 403 or an expired JWT leaves sections blank instead of redirecting to
   login.
+- **Allocation can store 0.00 shares.** When an amount has fewer cents than
+  participants (EQUAL 0.01 among 12), most participants get a 0.00 `expense_split` row;
+  `share_amount` has no CHECK constraint. Balances stay correct (sum exactly zero), but
+  it records someone as a participant who owes nothing. Recorded rather than changed
+  (decision 2026-10-06); options if it matters: reject amounts below 0.01 x participants,
+  or skip 0.00 rows.
 - Any group member can mark any settlement paid, not only its creditor (unchanged by
   the 2026-10-06 `markPaid` fix). Open question: should only the creditor confirm a
   payment was received?

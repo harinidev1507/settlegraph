@@ -21,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -32,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -294,6 +296,73 @@ class ExpenseServiceTest {
         assertMoney("3.33", shares.get(1L));
         assertMoney("6.67", shares.get(2L));
         assertMoney("10.00", sum(shares));
+    }
+
+    @Test
+    void allocatedSplits_acrossManyAmountsAndParticipantCounts_sumExactly_andEachShareIsWithinOneCentOfExact() {
+        // Generalises the hand-picked cases above: every allocated split type, from
+        // a single cent (fewer cents than participants -> some 0.00 shares) up to
+        // the largest amount @Digits allows, for 1..12 participants. Fixed seed so
+        // a failure is reproducible.
+        String[] amounts = {"0.01", "0.02", "0.05", "0.10", "0.99", "1.00", "1.01", "3.33", "10.00",
+                "33.33", "99.99", "100.00", "100.01", "333.34", "1000.00", "12345.67", "9999999999.99"};
+        groupOfMembers(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+        Random random = new Random(20261006L);
+
+        for (String amountText : amounts) {
+            BigDecimal amount = new BigDecimal(amountText);
+            for (int n = 1; n <= 12; n++) {
+                for (String splitType : List.of("EQUAL", "PERCENTAGE", "SHARES")) {
+                    Map<Long, BigDecimal> weights = randomWeights(splitType, n, random);
+                    CreateExpenseRequest request = splitRequest(amountText, splitType);
+                    if (splitType.equals("EQUAL")) {
+                        request.setParticipantIds(List.copyOf(weights.keySet()));
+                    } else {
+                        request.setSplits(weights);
+                    }
+                    clearInvocations(expenseSplitRepository);
+
+                    expenseService.addExpense(request, ACTOR);
+
+                    String where = splitType + " " + amountText + " among " + n + " weights=" + weights;
+                    Map<Long, BigDecimal> shares = savedShares();
+                    assertEquals(weights.keySet(), shares.keySet(), where);
+                    assertEquals(0, sum(shares).compareTo(amount), where + " summed to " + sum(shares));
+
+                    BigDecimal totalWeight = sum(weights);
+                    for (Long userId : shares.keySet()) {
+                        BigDecimal share = shares.get(userId);
+                        assertTrue(share.signum() >= 0, where + ": negative share " + share);
+                        // |share - amount*w/W| < 0.01, compared as |share*W - amount*w| < 0.01*W
+                        // so the non-terminating exact share never has to be computed.
+                        BigDecimal error = share.multiply(totalWeight).subtract(amount.multiply(weights.get(userId))).abs();
+                        assertTrue(error.compareTo(ONE_CENT.multiply(totalWeight)) < 0,
+                                where + ": user " + userId + " got " + share + ", more than a cent off exact");
+                    }
+                }
+            }
+        }
+    }
+
+    private static final BigDecimal ONE_CENT = new BigDecimal("0.01");
+
+    /** Users 1..n with weights valid for the split type (all 1 for EQUAL). */
+    private static Map<Long, BigDecimal> randomWeights(String splitType, int n, Random random) {
+        Map<Long, BigDecimal> weights = new HashMap<>();
+        if (splitType.equals("PERCENTAGE")) {
+            // Partition 10000 basis points into n positive parts -> 2dp percentages summing to exactly 100.
+            int remaining = 10_000;
+            for (long id = 1; id <= n; id++) {
+                int part = id == n ? remaining : 1 + random.nextInt(remaining - (n - (int) id));
+                weights.put(id, BigDecimal.valueOf(part, 2));
+                remaining -= part;
+            }
+        } else {
+            for (long id = 1; id <= n; id++) {
+                weights.put(id, splitType.equals("SHARES") ? BigDecimal.valueOf(1 + random.nextInt(10)) : BigDecimal.ONE);
+            }
+        }
+        return weights;
     }
 
     @Test
