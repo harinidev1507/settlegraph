@@ -43,6 +43,78 @@ function BarList({ data, labelFor, emptyText }) {
   );
 }
 
+// "2026-09" -> "2026-10". Plain string/number math: no Date object, so no
+// timezone can shift a month boundary.
+function nextMonthKey(key) {
+  const [year, month] = key.split("-").map(Number);
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+// Every month from the earliest to the latest with spending, in calendar order,
+// months with no expenses as 0. A gap is information: an empty month should
+// look empty, not silently disappear. (yyyy-MM keys sort chronologically as text.)
+function fillMonths(byMonth) {
+  const keys = Object.keys(byMonth).sort();
+  if (keys.length === 0) return [];
+  const last = keys[keys.length - 1];
+  const months = [];
+  for (let key = keys[0]; key <= last && months.length < 600; key = nextMonthKey(key)) {
+    months.push([key, Number(byMonth[key] ?? 0)]);
+  }
+  return months;
+}
+
+const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
+
+function shortMonth(key) {
+  const [year, month] = key.split("-").map(Number);
+  return new Date(year, month - 1, 1).toLocaleString(undefined, { month: "short" });
+}
+
+// Vertical columns, left to right in time. Column height = share of the
+// busiest month. The exact amount is in the tooltip and the accessible label;
+// the visible label is compact so narrow columns don't overflow.
+function MonthColumns({ data, emptyText }) {
+  const months = fillMonths(data);
+  if (months.length === 0) return <p className="muted">{emptyText}</p>;
+  const max = Math.max(...months.map(([, amount]) => amount));
+
+  return (
+    <ol className="month-columns">
+      {months.map(([key, amount], i) => {
+        const showYear = i === 0 || key.endsWith("-01");
+        const label = `${formatMonth(key)}: ${formatAmount(amount)}`;
+        return (
+          <li key={key} title={label} aria-label={label}>
+            <span className="month-value">{amount > 0 ? compact.format(amount) : "–"}</span>
+            <span className="month-track">
+              <span className="month-fill" style={{ height: `${max > 0 ? (amount / max) * 100 : 0}%` }} />
+            </span>
+            <span className="month-label">
+              {shortMonth(key)}
+              {showYear && <span className="month-year">{key.slice(0, 4)}</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// One category: a single 100% bar conveys nothing, so say it in a sentence.
+function CategoryBreakdown({ data, emptyText }) {
+  const entries = Object.entries(data);
+  if (entries.length === 1) {
+    const [category, amount] = entries[0];
+    return (
+      <p className="analytics-single">
+        All spending so far is in one category, <strong>{category}</strong>: {formatAmount(amount)}.
+      </p>
+    );
+  }
+  return <BarList data={data} labelFor={(k) => k} emptyText={emptyText} />;
+}
+
 export default function AnalyticsSection({ groupId, refreshKey }) {
   const [open, setOpen] = useState(false);
   const [byCategory, setByCategory] = useState({});
@@ -91,11 +163,11 @@ export default function AnalyticsSection({ groupId, refreshKey }) {
             <div className="analytics-grid">
               <div>
                 <p className="field-label">By category</p>
-                <BarList data={byCategory} labelFor={(k) => k} emptyText="No expenses yet." />
+                <CategoryBreakdown data={byCategory} emptyText="No expenses yet." />
               </div>
               <div>
                 <p className="field-label">By month</p>
-                <BarList data={byMonth} labelFor={formatMonth} emptyText="No expenses yet." />
+                <MonthColumns data={byMonth} emptyText="No expenses yet." />
               </div>
             </div>
           )}

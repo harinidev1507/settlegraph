@@ -384,6 +384,7 @@ button + .settlement-list { margin-top: 16px; }
   font-size: 14px;
 }
 .audit-action { color: var(--espresso-dark); }
+.audit-actor { font-weight: 600; }
 .audit-time {
   flex-shrink: 0;
   font-size: 12px;
@@ -412,7 +413,12 @@ button + .settlement-list { margin-top: 16px; }
 .status-badge.recurring { background: var(--cream-alt); color: var(--gold-dark); }
 
 /* --- Spending breakdown (single-hue bar list) --------------------------- */
-.analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }
+/* Stacked, not side by side: the month chart needs the full width so a typical
+   history (up to ~15 months at desktop) fits without its own scrollbar.
+   minmax(0, 1fr), not 1fr: a plain 1fr track can't shrink below its content's
+   min width, so a long month chart would widen the whole page on a phone
+   instead of scrolling inside .month-columns. */
+.analytics-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
 .bar-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
 .bar-list li {
   display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: 12px;
@@ -423,6 +429,17 @@ button + .settlement-list { margin-top: 16px; }
 .bar-fill { display: block; height: 100%; background: var(--gold); border-radius: 0 4px 4px 0; transition: width 240ms ease; }
 .bar-value { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--espresso-dark); white-space: nowrap; }
 .bar-value .muted { font-weight: 400; margin-left: 4px; }
+
+/* By-month columns: calendar order left to right. Scrolls inside its own box on
+   narrow screens instead of squashing columns or scrolling the page. */
+.month-columns { list-style: none; margin: 0; padding: 0 0 4px; display: flex; align-items: flex-end; gap: 8px; overflow-x: auto; }
+.month-columns li { flex: 1 0 32px; display: flex; flex-direction: column; align-items: center; gap: 6px; border: none; padding: 0; }
+.month-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--espresso-dark); white-space: nowrap; }
+.month-track { display: flex; align-items: flex-end; width: 100%; max-width: 40px; height: 120px; background: var(--cream-alt); border-radius: 4px; overflow: hidden; }
+.month-fill { display: block; width: 100%; background: var(--gold); border-radius: 4px 4px 0 0; transition: height 240ms ease; }
+.month-label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; align-items: center; line-height: 1.2; }
+.month-year { font-size: 11px; }
+.analytics-single { margin: 0; color: var(--espresso-dark); }
 
 /* --- Notifications ------------------------------------------------------- */
 .section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }

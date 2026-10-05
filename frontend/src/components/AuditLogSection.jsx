@@ -17,7 +17,9 @@ function formatTimestamp(raw) {
   });
 }
 
-export default function AuditLogSection({ groupId }) {
+// Names come from the page's member list (no extra request); falls back for an
+// ID it doesn't know.
+export default function AuditLogSection({ groupId, nameFor = (id) => `User #${id}` }) {
   const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -65,7 +67,10 @@ export default function AuditLogSection({ groupId }) {
             <ul className="audit-log-list">
               {entries.map((entry) => (
                 <li key={entry.id}>
-                  <span className="audit-action">{entry.action}</span>
+                  <span className="audit-action">
+                    <span className="audit-actor">{nameFor(entry.performedBy)}</span>
+                    {" · "}{entry.action}
+                  </span>
                   <time className="audit-time" dateTime={entry.createdAt}>
                     {formatTimestamp(entry.createdAt)}
                   </time>

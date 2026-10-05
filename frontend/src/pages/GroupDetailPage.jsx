@@ -173,7 +173,7 @@ export default function GroupDetailPage() {
         </ul>
       </section>
 
-      <AuditLogSection groupId={groupId} />
+      <AuditLogSection groupId={groupId} nameFor={memberName} />
     </div>
   );
 }

@@ -59,6 +59,12 @@ or silently ignored. Dates are absolute.
   handling. Since 2026-10-06 an expired/invalid JWT is a 401 and the axios interceptor
   clears the session and redirects to login, but a 403 (e.g. opening a group you're not
   in) still leaves the page stuck on "Loading…" with blank sections.
+- **Scheduler-generated audit rows credit a user for a system action.**
+  `RecurringExpenseService` logs "Generated recurring expense …" with `performed_by` =
+  the template's payer, so once the audit log shows actors (2026-10-06) it reads as if
+  that person did it. Wrong for an audit log; recorded, not fixed. A fix needs the
+  backend to mark system rows (e.g. nullable `performed_by` + a `system` flag) — not
+  string-matching the action text in the frontend.
 - **Email uniqueness is case-sensitive.** `AuthService.register` checks
   `existsByEmail` on the raw string (usernames, by contrast, are lowercased), so
   `Alice@x.com` and `alice@x.com` can register as two accounts, and login by email is
