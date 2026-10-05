@@ -6,6 +6,16 @@ or silently ignored. Dates are absolute.
 
 ## Deliberate trade-offs (not bugs)
 
+- **Split allocation is exact, by largest remainder.** EQUAL / PERCENTAGE / SHARES:
+  each share is floored to 2dp, then the leftover cents (always 0 to n-1) go one at a
+  time to the largest fractional remainders, ties by ascending user ID. Shares always
+  sum to exactly the expense total, so balances always sum to zero. PERCENTAGE must
+  total exactly 100. EXACT must match the total exactly with at most 2dp per value —
+  no tolerance: `numeric(12,2)` silently rounds a sub-cent value on insert (33.335 x2 +
+  33.33 was stored as 100.01 before this rule, verified 2026-10-06). The frontend
+  enforces the same rules. Expenses saved before 2026-10-06 were not migrated; the
+  drifting test rows were deleted instead.
+
 - **Recurring expenses are MONTHLY only.** `RecurrenceFrequency` has one value. The
   scheduler anchors on the template's `expense_date`: an occurrence for month M is due
   from day-of-month `min(anchorDay, lengthOf(M))` (a 31st anchor fires on the 30th/28th

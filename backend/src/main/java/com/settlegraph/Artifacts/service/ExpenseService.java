@@ -16,6 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -23,6 +26,9 @@ import java.util.stream.Collectors;
 
 @Service
 public class ExpenseService {
+
+    private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
+    private static final BigDecimal ONE_CENT = new BigDecimal("0.01");
 
     private final ExpenseRepository expenseRepository;
     private final ExpenseSplitRepository expenseSplitRepository;
@@ -72,8 +78,11 @@ public class ExpenseService {
             }
         }
 
+        // Exact, no tolerance: allocated split types always sum exactly, and an
+        // EXACT split the user typed that is off by a cent is a mistake to
+        // report — accepting it would leave balances that don't sum to zero.
         BigDecimal total = shares.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (total.subtract(request.getAmount()).abs().compareTo(new BigDecimal("0.02")) > 0) {
+        if (total.compareTo(request.getAmount()) != 0) {
             throw new IllegalArgumentException(
                     "Split amounts (" + total + ") do not add up to the expense total (" + request.getAmount() + ")");
         }
@@ -157,31 +166,34 @@ public class ExpenseService {
         }
 
         return switch (splitType) {
-            case "EXACT" -> request.getSplits();
+            case "EXACT" -> {
+                // EXACT values are stored as-is in numeric(12,2), which silently
+                // rounds a sub-cent value: 33.335 + 33.335 + 33.33 passes the
+                // exact-total check as typed (100.000) but is stored as 100.01.
+                // (PERCENTAGE / SHARES values are weights, so 33.333% is fine there.)
+                for (var entry : request.getSplits().entrySet()) {
+                    if (entry.getValue().stripTrailingZeros().scale() > 2) {
+                        throw new IllegalArgumentException("Exact split for user " + entry.getKey()
+                                + " has more than 2 decimal places (" + entry.getValue().toPlainString() + ")");
+                    }
+                }
+                yield request.getSplits();
+            }
 
             case "PERCENTAGE" -> {
-                Map<Long, BigDecimal> result = new java.util.HashMap<>();
-                for (var entry : request.getSplits().entrySet()) {
-                    BigDecimal share = request.getAmount()
-                            .multiply(entry.getValue())
-                            .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-                    result.put(entry.getKey(), share);
+                // Must be checked here, not left to the sum check in addExpense:
+                // allocate() normalises by the total weight, so 50% / 40% would
+                // otherwise be silently stretched to cover the whole amount.
+                BigDecimal totalPercent = request.getSplits().values()
+                        .stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+                if (totalPercent.compareTo(ONE_HUNDRED) != 0) {
+                    throw new IllegalArgumentException(
+                            "Percentages must add up to exactly 100 (got " + totalPercent + ")");
                 }
-                yield result;
+                yield allocate(request.getAmount(), request.getSplits());
             }
 
-            case "SHARES" -> {
-                BigDecimal totalShares = request.getSplits().values()
-                        .stream().reduce(BigDecimal.ZERO, BigDecimal::add);
-                Map<Long, BigDecimal> result = new java.util.HashMap<>();
-                for (var entry : request.getSplits().entrySet()) {
-                    BigDecimal share = request.getAmount()
-                            .multiply(entry.getValue())
-                            .divide(totalShares, 2, RoundingMode.HALF_UP);
-                    result.put(entry.getKey(), share);
-                }
-                yield result;
-            }
+            case "SHARES" -> allocate(request.getAmount(), request.getSplits());
 
             case "EQUAL" -> {
                 // Split across an explicit participant list supplied by the caller.
@@ -194,18 +206,63 @@ public class ExpenseService {
                     throw new IllegalArgumentException(
                             "EQUAL split requires an explicit list of participant user IDs");
                 }
-                BigDecimal share = request.getAmount()
-                        .divide(new BigDecimal(participantIds.size()), 2, RoundingMode.HALF_UP);
-                Map<Long, BigDecimal> result = new java.util.HashMap<>();
-                for (Long userId : participantIds) {
-                    result.put(userId, share);
+                if (new HashSet<>(participantIds).size() != participantIds.size()) {
+                    throw new IllegalArgumentException("EQUAL split participant list contains duplicates");
                 }
-                yield result;
+                Map<Long, BigDecimal> weights = new HashMap<>();
+                for (Long userId : participantIds) {
+                    weights.put(userId, BigDecimal.ONE);
+                }
+                yield allocate(request.getAmount(), weights);
             }
 
             default -> throw new IllegalArgumentException(
                     "Unknown splitType: " + splitType + " (expected EQUAL, EXACT, PERCENTAGE or SHARES)");
         };
+    }
+
+    /**
+     * Splits {@code amount} in proportion to {@code weights} so the shares sum
+     * to EXACTLY {@code amount} — no cent is created or lost to rounding.
+     *
+     * Largest-remainder rule: each share is first rounded DOWN to 2dp. The
+     * cents that leaves over go one at a time to the participants whose exact
+     * share lost the most to that floor (largest fractional remainder), ties
+     * broken by ascending user ID so the result is deterministic. Because
+     * every share loses strictly less than one cent, the leftover is always
+     * between 0 and n-1 cents; anything else is a bug to surface, not paper over.
+     */
+    private static Map<Long, BigDecimal> allocate(BigDecimal amount, Map<Long, BigDecimal> weights) {
+        BigDecimal totalWeight = weights.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        Map<Long, BigDecimal> shares = new HashMap<>();
+        // The exact share is amount*w/totalWeight, which may not terminate (1/3).
+        // Its remainder over the floor is (amount*w - floored*totalWeight) / totalWeight;
+        // the denominator is the same for everyone, so the numerator alone orders them.
+        Map<Long, BigDecimal> remainders = new HashMap<>();
+        BigDecimal allocated = BigDecimal.ZERO;
+        for (Map.Entry<Long, BigDecimal> entry : weights.entrySet()) {
+            BigDecimal numerator = amount.multiply(entry.getValue());
+            BigDecimal floored = numerator.divide(totalWeight, 2, RoundingMode.DOWN);
+            shares.put(entry.getKey(), floored);
+            remainders.put(entry.getKey(), numerator.subtract(floored.multiply(totalWeight)));
+            allocated = allocated.add(floored);
+        }
+
+        int leftoverCents = amount.subtract(allocated).movePointRight(2).intValueExact();
+        if (leftoverCents < 0 || leftoverCents >= shares.size()) {
+            throw new IllegalStateException("Split allocation left " + leftoverCents
+                    + " cents for " + shares.size() + " participants — expected 0 to n-1");
+        }
+
+        List<Long> byLargestRemainder = shares.keySet().stream()
+                .sorted(Comparator.comparing((Long id) -> remainders.get(id)).reversed()
+                        .thenComparing(Comparator.naturalOrder()))
+                .toList();
+        for (int i = 0; i < leftoverCents; i++) {
+            shares.merge(byLargestRemainder.get(i), ONE_CENT, BigDecimal::add);
+        }
+        return shares;
     }
 
     public List<Expense> getExpensesForGroup(Long groupId, Long requestingUserId) {

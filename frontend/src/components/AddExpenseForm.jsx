@@ -70,12 +70,26 @@ export default function AddExpenseForm({ groupId, members, onAdded }) {
         setError("Enter a split for at least one member");
         return;
       }
-      if (splitType === "EXACT" && Math.abs(splitTotal() - numericAmount) > 0.02) {
+      // Exact amounts are stored to the cent, so a sub-cent value (33.335) would
+      // be silently rounded on save. The backend rejects it; stop it here first.
+      // The epsilon only absorbs float noise (0.29 * 100 = 28.999...), not real cents.
+      if (splitType === "EXACT") {
+        const subCent = members.find((m) => splits[m.userId] !== undefined
+          && Math.abs(splits[m.userId] * 100 - Math.round(splits[m.userId] * 100)) > 1e-6);
+        if (subCent) {
+          setError(`Exact amount for ${subCent.name} can have at most 2 decimal places`);
+          return;
+        }
+      }
+      // Both must match exactly, as the backend requires. Compare in whole cents
+      // (and with a float-noise epsilon for percentages) so 0.1 + 0.2 style
+      // binary rounding can't cause a false rejection.
+      if (splitType === "EXACT" && Math.round(splitTotal() * 100) !== Math.round(numericAmount * 100)) {
         setError(`Exact amounts (${splitTotal().toFixed(2)}) must add up to the total (${numericAmount.toFixed(2)})`);
         return;
       }
-      if (splitType === "PERCENTAGE" && Math.abs(splitTotal() - 100) > 0.02) {
-        setError(`Percentages must add up to 100 (currently ${splitTotal().toFixed(2)})`);
+      if (splitType === "PERCENTAGE" && Math.abs(splitTotal() - 100) > 1e-9) {
+        setError(`Percentages must add up to 100 (currently ${Number(splitTotal().toFixed(6))})`);
         return;
       }
     }

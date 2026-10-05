@@ -2,6 +2,7 @@ package com.settlegraph.Artifacts.service;
 
 import com.settlegraph.Artifacts.dto.CreateExpenseRequest;
 import com.settlegraph.Artifacts.entity.Expense;
+import com.settlegraph.Artifacts.entity.ExpenseSplit;
 import com.settlegraph.Artifacts.entity.GroupMember;
 import com.settlegraph.Artifacts.entity.RecurrenceFrequency;
 import com.settlegraph.Artifacts.exception.ForbiddenException;
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,6 +31,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -40,6 +44,10 @@ import static org.mockito.Mockito.when;
  *     participant list, never a silent fall-back to current group membership
  *   - the notification fan-out: adding an expense notifies every OTHER member
  *     of the group, and never the person who added it
+ *   - split allocation: EQUAL / PERCENTAGE / SHARES shares sum to EXACTLY the
+ *     total (largest-remainder, ties by user ID); EXACT must match the total
+ *     exactly with at most 2dp per value; invalid input writes nothing
+ * plus authorization, recurring-template validation and stopRecurring.
  *
  * Repositories and NotificationService are mocked — no database or Spring context.
  */
@@ -165,6 +173,178 @@ class ExpenseServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> expenseService.addExpense(request, ACTOR));
         verify(expenseRepository, never()).save(any());
+    }
+
+    // ---- split allocation: shares must sum to EXACTLY the expense total ----
+    // Largest-remainder rule: floor each share to 2dp, then hand leftover cents
+    // one at a time to the largest fractional remainders, ties by ascending user ID.
+
+    private void groupOfMembers(long... userIds) {
+        List<GroupMember> members = new ArrayList<>();
+        for (long id : userIds) members.add(new GroupMember(id, GROUP));
+        when(groupMemberRepository.findByIdGroupId(GROUP)).thenReturn(members);
+    }
+
+    private CreateExpenseRequest splitRequest(String amount, String splitType) {
+        CreateExpenseRequest request = new CreateExpenseRequest();
+        request.setGroupId(GROUP);
+        request.setAmount(new BigDecimal(amount));
+        request.setDescription("Split test");
+        request.setSplitType(splitType);
+        return request;
+    }
+
+    /** userId -> share amount, as actually handed to the split repository. */
+    private Map<Long, BigDecimal> savedShares() {
+        ArgumentCaptor<ExpenseSplit> captor = ArgumentCaptor.forClass(ExpenseSplit.class);
+        verify(expenseSplitRepository, atLeastOnce()).save(captor.capture());
+        Map<Long, BigDecimal> shares = new HashMap<>();
+        for (ExpenseSplit s : captor.getAllValues()) {
+            shares.put(s.getId().getUserId(), s.getShareAmount());
+        }
+        return shares;
+    }
+
+    private static void assertMoney(String expected, BigDecimal actual) {
+        assertEquals(0, new BigDecimal(expected).compareTo(actual),
+                "expected " + expected + " but was " + actual);
+    }
+
+    private static BigDecimal sum(Map<Long, BigDecimal> shares) {
+        return shares.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    @Test
+    void equalSplit_100Among3_sumsExactlyToTotal_tiedRemaindersGoToLowestUserId() {
+        // Audit bug 1: used to save 33.33 x 3 = 99.99, leaving balances off by +0.01.
+        // Every remainder is equal in an EQUAL split, so the tie-break decides.
+        groupOfMembers(1, 2, 3);
+        CreateExpenseRequest request = splitRequest("100.00", "EQUAL");
+        request.setParticipantIds(List.of(3L, 1L, 2L)); // deliberately unsorted
+
+        expenseService.addExpense(request, ACTOR);
+
+        Map<Long, BigDecimal> shares = savedShares();
+        assertEquals(3, shares.size());
+        assertMoney("33.34", shares.get(1L));
+        assertMoney("33.33", shares.get(2L));
+        assertMoney("33.33", shares.get(3L));
+        assertMoney("100.00", sum(shares));
+    }
+
+    @Test
+    void equalSplit_100Among7_isAccepted_andSumsExactlyToTotal() {
+        // Audit bug 2: HALF_UP gave 14.29 x 7 = 100.03, which the 0.02 tolerance
+        // rejected with a 400. Floors are 14.28 x 7 = 99.96 -> 4 leftover cents.
+        groupOfMembers(1, 2, 3, 4, 5, 6, 7);
+        CreateExpenseRequest request = splitRequest("100.00", "EQUAL");
+        request.setParticipantIds(List.of(1L, 2L, 3L, 4L, 5L, 6L, 7L));
+
+        expenseService.addExpense(request, ACTOR);
+
+        Map<Long, BigDecimal> shares = savedShares();
+        for (long id = 1; id <= 4; id++) assertMoney("14.29", shares.get(id));
+        for (long id = 5; id <= 7; id++) assertMoney("14.28", shares.get(id));
+        assertMoney("100.00", sum(shares));
+    }
+
+    @Test
+    void percentageSplit_leftoverCentGoesToTheLargestRemainder_notTheLowestUserId() {
+        // 10.00 at 33.33 / 33.33 / 33.34 -> exact 3.333 / 3.333 / 3.334, floors 3.33 x 3 = 9.99.
+        // User 3 lost the most to the floor (0.004 vs 0.003), so user 3 gets the
+        // cent — a lowest-user-ID rule would wrongly have given it to user 1.
+        groupOfMembers(1, 2, 3);
+        CreateExpenseRequest request = splitRequest("10.00", "PERCENTAGE");
+        request.setSplits(Map.of(1L, new BigDecimal("33.33"), 2L, new BigDecimal("33.33"), 3L, new BigDecimal("33.34")));
+
+        expenseService.addExpense(request, ACTOR);
+
+        Map<Long, BigDecimal> shares = savedShares();
+        assertMoney("3.33", shares.get(1L));
+        assertMoney("3.33", shares.get(2L));
+        assertMoney("3.34", shares.get(3L));
+        assertMoney("10.00", sum(shares));
+    }
+
+    @Test
+    void percentagesNotSummingTo100_areRejected_andNothingIsWritten() {
+        // Allocation normalises by total weight, so without an explicit check
+        // 50% / 40% would be silently stretched to cover the whole amount.
+        groupOfMembers(1, 2);
+        CreateExpenseRequest request = splitRequest("100.00", "PERCENTAGE");
+        request.setSplits(Map.of(1L, new BigDecimal("50"), 2L, new BigDecimal("40")));
+
+        assertThrows(IllegalArgumentException.class, () -> expenseService.addExpense(request, ACTOR));
+
+        verify(expenseRepository, never()).save(any());
+        verify(expenseSplitRepository, never()).save(any());
+    }
+
+    @Test
+    void sharesSplit_1to2_leftoverCentGoesToTheLargestRemainder_notTheLowestUserId() {
+        // 10.00 at 1:2 -> exact 3.333... / 6.666..., floors 3.33 + 6.66 = 9.99.
+        // User 2 lost 0.00666... to the floor vs user 1's 0.00333..., so user 2 gets the cent.
+        groupOfMembers(1, 2);
+        CreateExpenseRequest request = splitRequest("10.00", "SHARES");
+        request.setSplits(Map.of(1L, new BigDecimal("1"), 2L, new BigDecimal("2")));
+
+        expenseService.addExpense(request, ACTOR);
+
+        Map<Long, BigDecimal> shares = savedShares();
+        assertMoney("3.33", shares.get(1L));
+        assertMoney("6.67", shares.get(2L));
+        assertMoney("10.00", sum(shares));
+    }
+
+    @Test
+    void exactSplit_offByOneCent_isRejected_andNothingIsWritten() {
+        // Used to pass the old ±0.02 tolerance and leave balances summing to +0.01.
+        groupOfMembers(1, 2, 3);
+        CreateExpenseRequest request = splitRequest("100.00", "EXACT");
+        request.setSplits(Map.of(1L, new BigDecimal("33.33"), 2L, new BigDecimal("33.33"), 3L, new BigDecimal("33.33")));
+
+        assertThrows(IllegalArgumentException.class, () -> expenseService.addExpense(request, ACTOR));
+
+        verify(expenseRepository, never()).save(any());
+        verify(expenseSplitRepository, never()).save(any());
+    }
+
+    @Test
+    void exactSplit_withSubCentValues_isRejected_evenThoughTheTypedValuesSumToTheTotal() {
+        // 33.335 + 33.335 + 33.33 = 100.000 passes the total check, but numeric(12,2)
+        // stored it as 33.34 + 33.34 + 33.33 = 100.01 (seen against real Postgres).
+        groupOfMembers(1, 2, 3);
+        CreateExpenseRequest request = splitRequest("100.00", "EXACT");
+        request.setSplits(Map.of(1L, new BigDecimal("33.335"), 2L, new BigDecimal("33.335"), 3L, new BigDecimal("33.33")));
+
+        assertThrows(IllegalArgumentException.class, () -> expenseService.addExpense(request, ACTOR));
+
+        verify(expenseRepository, never()).save(any());
+        verify(expenseSplitRepository, never()).save(any());
+    }
+
+    @Test
+    void exactSplit_withTrailingZerosPastTwoPlaces_isStillAccepted() {
+        // 33.330 is a 2dp value written with an extra zero — not a sub-cent amount.
+        groupOfMembers(1, 2, 3);
+        CreateExpenseRequest request = splitRequest("100.00", "EXACT");
+        request.setSplits(Map.of(1L, new BigDecimal("33.330"), 2L, new BigDecimal("33.330"), 3L, new BigDecimal("33.340")));
+
+        expenseService.addExpense(request, ACTOR);
+
+        assertMoney("100.00", sum(savedShares()));
+    }
+
+    @Test
+    void equalSplit_withDuplicateParticipant_isRejected_andNothingIsWritten() {
+        groupOfMembers(1, 2);
+        CreateExpenseRequest request = splitRequest("100.00", "EQUAL");
+        request.setParticipantIds(List.of(1L, 1L, 2L));
+
+        assertThrows(IllegalArgumentException.class, () -> expenseService.addExpense(request, ACTOR));
+
+        verify(expenseRepository, never()).save(any());
+        verify(expenseSplitRepository, never()).save(any());
     }
 
     // ---- recurring expenses ----
