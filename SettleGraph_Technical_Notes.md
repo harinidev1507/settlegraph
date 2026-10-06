@@ -62,10 +62,12 @@ or silently ignored. Dates are absolute.
   platform needs an HTTP health check.
 - No edit/delete for expenses or settlements. Corrections today mean adding a
   compensating expense.
-- **`npm audit` reports two high-severity advisories** (seen 2026-10-06 while adding
-  Vitest; both predate it): `axios` 1.19.0, a production dependency, and
-  `source-map-js` 1.2.1, pulled in by vite/postcss (and jsdom). `npm audit fix` offers
-  fixes; not applied — upgrading axios should be its own change, re-tested.
+- **`npm audit`: one high-severity advisory left, in build tooling only.**
+  `source-map-js` 1.2.1 (event-loop DoS via crafted source maps), pulled in by
+  vite/postcss and jsdom — not shipped to users, so left as is (decision 2026-10-06).
+  The other advisory found the same day, `axios` 1.19.0 (a production dependency;
+  prototype-pollution, ReDoS and header-injection advisories), was fixed by upgrading
+  to 1.20.0 on its own — see the verification log.
 - No CI. The backend has 89 unit tests (`mvn test`) and 63 integration tests against
   a real Postgres (`mvn verify`); the frontend has 25 (`npm test`, added 2026-10-06:
   SHARES preview, split validation, the 401 interceptor, GroupDetailPage load errors).
@@ -180,6 +182,15 @@ clear-on-focus, which would turn "clicked in, clicked away" into an empty value 
 the form silently drops members with empty values from the split.
 
 ## Verification log (how the non-mockable pieces were checked)
+
+- **axios 1.19.0 → 1.20.0 (2026-10-06).** Installed alone (`npm install axios@^1.20.0`,
+  not `npm audit fix`); the lockfile diff touches only axios, and `npm audit` went
+  from 2 high advisories to 1 (source-map-js). `npm test` 25/25, build and lint clean.
+  In the browser: the Vite dev server had to be restarted first — its pre-bundled deps
+  were still 1.19.0 — after which the bundle the app loads reported `VERSION` 1.20.0.
+  Then, with a throwaway account: login `POST /auth/login` 200 → dashboard (3 calls,
+  200, token attached by the request interceptor) → a group page (6 calls, 200;
+  members, balance and expense rendered). Account and group deleted afterwards.
 
 - **SHARES preview vs. stored rows (2026-10-06).** In the browser, the preview was
   compared with what the backend saved: 75 at 11:21 previewed `25.78 · 49.22`, the
