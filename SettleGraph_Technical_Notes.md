@@ -62,9 +62,15 @@ or silently ignored. Dates are absolute.
   platform needs an HTTP health check.
 - No edit/delete for expenses or settlements. Corrections today mean adding a
   compensating expense.
-- No frontend tests and no CI. The backend has 89 unit tests (`mvn test`) and 63
-  integration tests against a real Postgres (`mvn verify`); the React side
-  has none, and nothing runs `mvn test` / `npm run build` on push.
+- **`npm audit` reports two high-severity advisories** (seen 2026-10-06 while adding
+  Vitest; both predate it): `axios` 1.19.0, a production dependency, and
+  `source-map-js` 1.2.1, pulled in by vite/postcss (and jsdom). `npm audit fix` offers
+  fixes; not applied — upgrading axios should be its own change, re-tested.
+- No CI. The backend has 89 unit tests (`mvn test`) and 63 integration tests against
+  a real Postgres (`mvn verify`); the frontend has 25 (`npm test`, added 2026-10-06:
+  SHARES preview, split validation, the 401 interceptor, GroupDetailPage load errors).
+  Nothing runs any of them, or `npm run build`, on push. Most frontend components
+  (dashboard, notifications, analytics, invites) are still untested.
 - **A deleted user's JWT is still accepted.** `JwtAuthFilter` trusts the token's
   claims and never checks that the user still exists, so a token for a deleted user
   gets 200s with empty data on reads, and a write fails on a foreign key with a 500
@@ -181,10 +187,19 @@ the form silently drops members with empty values from the split.
   `3.33 · 6.67` and, submitted, stored 3.33 / 6.67. Also: 100.01 at 1:1 → `50.01 ·
   50.00` (tie to the lower user ID, as the backend does), 10 at 1.5:1 → `6.00 · 4.00`,
   an amount with three decimals → the "Enter an amount…" prompt instead of a guess.
-  **No automated test:** the frontend has no test framework (see "No frontend tests"
-  above); adding one is its own decision, so this check is manual for now. The
-  preview duplicates the backend algorithm, so a change to `allocate()` must be
-  mirrored in `AddExpenseForm.jsx`.
+  Now also covered automatically: the rule lives in `frontend/src/money/sharesPreview.js`
+  and `sharesPreview.test.js` runs the backend's own `ExpenseServiceTest` cases against
+  it. A change to `allocate()` must still be mirrored there — the tests catch a drift
+  only for the cases they share, so port any new backend case too.
+- **Frontend tests catch real regressions (2026-10-06).** Each check broke the code on
+  purpose, ran `npm test`, and restored it (byte-identical / no git diff):
+  `previewShares` giving leftover cents to the lowest user ID → 4 tests failed (e.g.
+  10.00 at 1:2 got 3.34 / 6.66); ties by member order instead of user ID → both tie
+  tests failed (100.01 at 1:1 gave the cent to user 39); the 401 interceptor without
+  its `/login` guard → 1 failed; not clearing `settlegraph_user` → 2 failed; logging
+  out on any 4xx → the 403 test failed. jsdom note: `window.location.assign` can't be
+  spied on (non-configurable), so the tests stub `window.location` instead — no
+  production code was changed for testability.
 
 - **Dev-database cleanup (2026-10-06, phase 6).** Before deleting users 21–37 and
   groups 11–26, checked that no row linked them to anything outside those ranges

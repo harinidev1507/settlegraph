@@ -41,7 +41,7 @@ For example, if A owes B 100 and B owes C 100, the plan is a single payment from
 | Backend | Java 21, Spring Boot 3.3, Spring Web, Spring Data JPA, Spring Security (stateless JWT, HS512), Bean Validation |
 | Database | PostgreSQL 16, with the schema managed by Flyway migrations (`backend/src/main/resources/db/migration`) |
 | Frontend | React 19, Vite, React Router 7, Axios |
-| Tests | JUnit 5 + Mockito for unit tests; `@SpringBootTest` + MockMvc against a real Postgres for integration tests |
+| Tests | JUnit 5 + Mockito for unit tests; `@SpringBootTest` + MockMvc against a real Postgres for integration tests; Vitest + React Testing Library (jsdom) for the frontend |
 
 ## Running it locally
 
@@ -230,8 +230,13 @@ mvn test     # 89 unit tests: no database, no Spring context
 mvn verify   # the 89 unit tests + 63 integration tests against settlegraph_test
 ```
 
-These counts come from the latest run: `mvn verify` gave **89 + 63 = 152 tests, 0
-failures**.
+```bash
+cd frontend
+npm test     # 25 frontend tests: Vitest + React Testing Library, no backend
+```
+
+These counts come from the latest runs: `mvn verify` gave **89 + 63 = 152 tests, 0
+failures**, and `npm test` gave **25 tests, 0 failures**.
 
 **Unit tests (89):** plain JUnit + Mockito in `src/test/java`, with no Spring context
 and no database.
@@ -262,9 +267,30 @@ the real `settlegraph_test` Postgres database.
 Each integration test truncates every table first. A guard refuses to run against
 any database other than `settlegraph_test`.
 
+**Frontend tests (25):** `*.test.js(x)` next to the code, run by Vitest in jsdom. API
+modules are mocked at the import boundary, so no backend is needed.
+
+- `money/sharesPreview.test.js` (12): the SHARES preview copies the backend's split
+  rule, so it's tested against the backend's own `ExpenseServiceTest` cases (labelled
+  `[backend]`), rows the backend actually stored, and preview-only cases such as
+  decimal shares and the fallback for amounts with more than two decimals.
+- `components/AddExpenseForm.test.jsx` (8): the preview line, and client-side split
+  validation. Each rejected split checks the error message *and* that no request was
+  sent; each valid split checks the exact request.
+- `api/client.test.js` (3): the 401 interceptor clears both session keys and redirects
+  to `/login` (but not when already there); a 403 leaves the session alone.
+- `pages/GroupDetailPage.test.jsx` (2): a 403 shows "You don't have access to this
+  group." rather than a stuck loading state, and a failed refresh keeps the data on
+  screen with an error banner.
+
+For the SHARES preview and the 401 interceptor, the code was deliberately broken
+(cents to the lowest ID, ties in member order, no `/login` guard, the user key not
+cleared, logging out on any 4xx) to confirm a test fails each time.
+
 **What the tests don't cover:**
 
-- The frontend has no automated tests.
+- Most frontend components (dashboard, notifications, analytics, invites) have no
+  tests yet, and jsdom can't prove CORS, real navigation or layout.
 - No CI is set up.
 
 Behaviour that depends on the database rather than a mock was checked by hand against
