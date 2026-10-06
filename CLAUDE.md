@@ -34,6 +34,10 @@ Testing conventions
 * Service-layer tests use plain JUnit + Mockito, no Spring context, no real database (see `BalanceServiceTest`, `SettlementServiceTest` as reference examples).
 * Controller and security tests use `@SpringBootTest` + MockMvc, because the security filter chain only exists inside Spring's request pipeline — mocking around it would test nothing. That is a reason to use Spring for this layer, not a reason to skip testing it.
 * Keep the Spring-context tests separate from the service tests so the fast suite stays fast: they live in `*IT.java` classes, run by `mvn verify`, while `mvn test` runs only the plain unit tests.
+* Frontend tests use Vitest + React Testing Library in jsdom, with no real backend: API modules (`src/api/*`) are mocked at the import boundary with `vi.mock`. They live next to the code as `*.test.js(x)` and run with `npm test` in `frontend/`, separate from both Maven suites.
+* Frontend tests assert what the user sees and what gets sent — rendered text, and the exact API call (or `not.toHaveBeenCalled()` when input must be rejected) — never component state or internals.
+* Money logic in the frontend lives in plain functions in their own module (e.g. `src/money/sharesPreview.js`) and is unit-tested directly. Anything that mirrors a backend rule must be tested against the backend's own test cases, labelled as such, so the two can't drift silently.
+* jsdom tests cannot prove CORS, real page navigation, layout, or behavior against the real API. Changes in those areas still need a check in a real browser against the running backend, per the verification rules above.
 * Name tests to describe the specific behavior being locked in (e.g. `generatingTwiceWithUnchangedBalances_leavesExactlyOnePendingSettlement`), not generic names like `testGenerate1`.
 * When a real bug is found (through manual testing or otherwise), write a regression test for it as part of the fix — the fix isn't considered complete until a test exists that would fail if the bug came back.
 
