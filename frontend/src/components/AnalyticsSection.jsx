@@ -117,35 +117,36 @@ function CategoryBreakdown({ data, emptyText }) {
 
 export default function AnalyticsSection({ groupId, refreshKey }) {
   const [open, setOpen] = useState(false);
-  const [byCategory, setByCategory] = useState({});
-  const [byMonth, setByMonth] = useState({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function load() {
-    setLoading(true);
-    setError("");
-    try {
-      const [c, m] = await Promise.all([getSpendByCategory(groupId), getSpendByMonth(groupId)]);
-      setByCategory(c);
-      setByMonth(m);
-    } catch (err) {
-      setError(apiErrorMessage(err, "Could not load spending analytics"));
-    } finally {
-      setLoading(false);
-    }
-  }
+  // The last completed load, tagged with the (group, refresh) it answers.
+  // "Loading" is derived — open with no answer for the current key yet —
+  // rather than set inside the effect.
+  const requestKey = `${groupId}:${refreshKey}`;
+  const [result, setResult] = useState(null); // { key, byCategory, byMonth } | { key, error }
 
   function toggle() {
     setOpen((v) => !v);
   }
 
-  // Lazy-load on first expand (keeps it out of the page's initial burst of
-  // requests) and refetch whenever the parent signals the expense list
-  // changed, so the numbers don't go stale behind the user's back.
+  // Lazy-load on expand (keeps it out of the page's initial burst of requests)
+  // and refetch whenever the parent signals the expense list changed, so the
+  // numbers don't go stale behind the user's back.
   useEffect(() => {
-    if (open) load();
-  }, [open, refreshKey]);
+    if (!open) return;
+    let ignore = false;
+    Promise.all([getSpendByCategory(groupId), getSpendByMonth(groupId)]).then(
+      ([byCategory, byMonth]) => { if (!ignore) setResult({ key: requestKey, byCategory, byMonth }); },
+      (err) => {
+        if (!ignore) setResult({ key: requestKey, error: apiErrorMessage(err, "Could not load spending analytics") });
+      }
+    );
+    return () => { ignore = true; };
+  }, [open, groupId, requestKey]);
+
+  const current = result?.key === requestKey ? result : null;
+  const loading = open && !current;
+  const error = current?.error ?? "";
+  const byCategory = current?.byCategory ?? {};
+  const byMonth = current?.byMonth ?? {};
 
   return (
     <section className="analytics">

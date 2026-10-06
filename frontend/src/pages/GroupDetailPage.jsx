@@ -4,65 +4,114 @@ import { getBalances, getGroup, getGroupMembers } from "../api/groups";
 import { getExpensesForGroup, stopRecurring } from "../api/expenses";
 import { generateSettlementPlan, getSettlements, markSettlementPaid } from "../api/settlements";
 import { getGroupInvites } from "../api/invites";
+import { apiErrorMessage } from "../api/errors";
 import AddExpenseForm from "../components/AddExpenseForm";
 import InviteMemberForm from "../components/InviteMemberForm";
 import AuditLogSection from "../components/AuditLogSection";
 import AnalyticsSection from "../components/AnalyticsSection";
 
+// What to tell the user when the page itself can't load. A 403 here means
+// "not a member" (the backend returns it for a group that doesn't exist too,
+// so it can't be probed). A 401 never reaches this screen for long: the API
+// client clears the session and redirects to /login.
+function loadFailureMessage(err) {
+  if (err?.response?.status === 403) return "You don't have access to this group.";
+  return apiErrorMessage(err, "Could not load this group.");
+}
+
 export default function GroupDetailPage() {
   const { groupId } = useParams();
-  const [group, setGroup] = useState(null);
-  const [balances, setBalances] = useState({});
-  const [expenses, setExpenses] = useState([]);
-  const [settlements, setSettlements] = useState([]);
-  const [members, setMembers] = useState([]);
-  const [groupInvites, setGroupInvites] = useState([]);
-  const [error, setError] = useState("");
-  // Bumped on every reload so the (lazy) analytics section knows to refetch.
-  const [refreshKey, setRefreshKey] = useState(0);
+  // The last completed load, tagged with the group it belongs to, so a slow
+  // response for a group we've navigated away from is never shown. Loading is
+  // derived (no result for this group yet) rather than set inside the effect.
+  const [result, setResult] = useState(null); // { groupId, data, reloadError? } | { groupId, error }
+  // Bumped after every change on the page; reloads the data and tells the
+  // (lazy) analytics section to refetch.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [expenseError, setExpenseError] = useState("");
+  const [settleError, setSettleError] = useState("");
+  const [settleBusy, setSettleBusy] = useState(false);
 
-  async function loadAll() {
-    const [g, b, e, s, m, i] = await Promise.all([
+  useEffect(() => {
+    let ignore = false;
+    Promise.all([
       getGroup(groupId),
       getBalances(groupId),
       getExpensesForGroup(groupId),
       getSettlements(groupId),
       getGroupMembers(groupId),
       getGroupInvites(groupId),
-    ]);
-    setGroup(g);
-    setBalances(b);
-    setExpenses(e);
-    setSettlements(s);
-    setMembers(m);
-    setGroupInvites(i);
-    setRefreshKey((k) => k + 1);
+    ]).then(
+      ([group, balances, expenses, settlements, members, groupInvites]) => {
+        if (!ignore) setResult({ groupId, data: { group, balances, expenses, settlements, members, groupInvites } });
+      },
+      (err) => {
+        if (ignore) return;
+        // A failed refresh of a page that already loaded keeps the data on
+        // screen with a banner; only a failed first load replaces the page.
+        setResult((prev) => (prev?.groupId === groupId && prev.data
+          ? { ...prev, reloadError: loadFailureMessage(err) }
+          : { groupId, error: loadFailureMessage(err) }));
+      }
+    );
+    return () => { ignore = true; };
+  }, [groupId, reloadKey]);
+
+  function reload() {
+    setReloadKey((k) => k + 1);
   }
 
-  useEffect(() => { loadAll(); }, [groupId]);
+  const current = result?.groupId === groupId ? result : null;
+
+  if (!current || current.error) {
+    return (
+      <div className="page">
+        <Link to="/dashboard" className="back-link">&larr; Back to Dashboard</Link>
+        {current?.error
+          ? <p className="error">{current.error}</p>
+          : <p className="muted">Loading…</p>}
+      </div>
+    );
+  }
+
+  const { group, balances, expenses, settlements, members, groupInvites } = current.data;
 
   function memberName(userId) {
     const member = members.find((m) => String(m.userId) === String(userId));
     return member ? member.name : `User #${userId}`;
   }
 
-  async function handleSettleUp() {
-    await generateSettlementPlan(groupId);
-    loadAll();
+  // Settle-up actions are disabled while one is in flight: a double click on
+  // "Mark paid" would otherwise send a second request that the backend
+  // (correctly) rejects as already paid, and show that as an error.
+  async function runSettleAction(action, fallbackMessage) {
+    setSettleError("");
+    setSettleBusy(true);
+    try {
+      await action();
+      reload();
+    } catch (err) {
+      setSettleError(apiErrorMessage(err, fallbackMessage));
+    } finally {
+      setSettleBusy(false);
+    }
   }
 
-  async function handleMarkPaid(settlementId) {
-    await markSettlementPaid(groupId, settlementId);
-    loadAll();
+  function handleSettleUp() {
+    runSettleAction(() => generateSettlementPlan(groupId), "Could not generate a settlement plan");
+  }
+
+  function handleMarkPaid(settlementId) {
+    runSettleAction(() => markSettlementPaid(groupId, settlementId), "Could not mark the payment as paid");
   }
 
   async function handleStopRecurring(expenseId) {
-    setError("");
+    setExpenseError("");
     try {
       await stopRecurring(expenseId);
-      loadAll();
+      reload();
     } catch (err) {
-      setError(err.response?.data?.error || "Could not stop the recurring expense");
+      setExpenseError(apiErrorMessage(err, "Could not stop the recurring expense"));
     }
   }
 
@@ -71,8 +120,9 @@ export default function GroupDetailPage() {
       <Link to="/dashboard" className="back-link">&larr; Back to Dashboard</Link>
       <div className="brand brand-inline">
         <span className="eyebrow">Group overview</span>
-        <h1>{group ? group.name : "Loading…"}</h1>
+        <h1>{group.name}</h1>
       </div>
+      {current.reloadError && <p className="error">{current.reloadError}</p>}
 
       <section>
         <span className="eyebrow">Who's in</span>
@@ -85,7 +135,7 @@ export default function GroupDetailPage() {
             </li>
           ))}
         </ul>
-        <InviteMemberForm groupId={groupId} onInvited={loadAll} />
+        <InviteMemberForm groupId={groupId} onInvited={reload} />
         {groupInvites.filter((i) => i.status === "PENDING").length > 0 && (
           <div className="pending-invites">
             <p className="field-label">Pending invites</p>
@@ -121,14 +171,14 @@ export default function GroupDetailPage() {
         <span className="eyebrow">Log a cost</span>
         <h2>Add an expense</h2>
         {members.length > 0 && (
-          <AddExpenseForm groupId={groupId} members={members} onAdded={loadAll} />
+          <AddExpenseForm groupId={groupId} members={members} onAdded={reload} />
         )}
       </section>
 
       <section>
         <span className="eyebrow">History</span>
         <h2>Expenses</h2>
-        {error && <p className="error">{error}</p>}
+        {expenseError && <p className="error">{expenseError}</p>}
         <ul className="expense-list">
           {expenses.map((e) => (
             <li key={e.id}>
@@ -152,12 +202,13 @@ export default function GroupDetailPage() {
         </ul>
       </section>
 
-      <AnalyticsSection groupId={groupId} refreshKey={refreshKey} />
+      <AnalyticsSection groupId={groupId} refreshKey={reloadKey} />
 
       <section>
         <span className="eyebrow">Wrap it up</span>
         <h2>Settle Up</h2>
-        <button onClick={handleSettleUp}>Simplify & Generate Settlement Plan</button>
+        <button onClick={handleSettleUp} disabled={settleBusy}>Simplify & Generate Settlement Plan</button>
+        {settleError && <p className="error">{settleError}</p>}
         <ul className="settlement-list">
           {settlements.map((s) => (
             <li key={s.id}>
@@ -165,7 +216,8 @@ export default function GroupDetailPage() {
               <span className="amount">{s.amount}</span>
               <span className={`status-badge ${s.status.toLowerCase()}`}>{s.status}</span>
               {s.status === "PENDING" && (
-                <button className="btn-ghost btn-small" onClick={() => handleMarkPaid(s.id)}>Mark paid</button>
+                <button className="btn-ghost btn-small" disabled={settleBusy}
+                        onClick={() => handleMarkPaid(s.id)}>Mark paid</button>
               )}
             </li>
           ))}

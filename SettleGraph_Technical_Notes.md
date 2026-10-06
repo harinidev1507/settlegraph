@@ -55,10 +55,9 @@ or silently ignored. Dates are absolute.
 - No frontend tests and no CI. The backend has 89 unit tests (`mvn test`) and 63
   integration tests against a real Postgres (`mvn verify`); the React side
   has none, and nothing runs `mvn test` / `npm run build` on push.
-- Page-level `loadAll()` calls in `DashboardPage` / `GroupDetailPage` have no error
-  handling. Since 2026-10-06 an expired/invalid JWT is a 401 and the axios interceptor
-  clears the session and redirects to login, but a 403 (e.g. opening a group you're not
-  in) still leaves the page stuck on "Loading…" with blank sections.
+- **Zero balance reads "is owed 0".** `GroupDetailPage` labels `amt >= 0` as
+  "is owed", so a fully settled member shows "is owed 0" instead of "settled up".
+  Cosmetic, pre-existing; recorded 2026-10-06, not fixed.
 - **Scheduler-generated audit rows credit a user for a system action.**
   `RecurringExpenseService` logs "Generated recurring expense …" with `performed_by` =
   the template's payer, so once the audit log shows actors (2026-10-06) it reads as if
@@ -86,6 +85,15 @@ or silently ignored. Dates are absolute.
   set `JWT_SECRET`.
 
 ## Verification log (how the non-mockable pieces were checked)
+
+- **Page load errors (2026-10-06).** `DashboardPage` / `GroupDetailPage` /
+  `NotificationsSection` / `AnalyticsSection` now catch their load promises. Checked in
+  the browser on a fresh fixture (group 26): a 403 (non-member opening group 21) shows
+  "You don't have access to this group."; a 401 (backend restarted with a different
+  `JWT_SECRET`, so the stored token stops validating) redirects to /login with storage
+  cleared and no `Uncaught (in promise)` in the console, on both the group page and the
+  dashboard. Control run with the pre-change code under the same 401 logged
+  `Uncaught (in promise) AxiosError … at loadAll`, so the check does detect the bug.
 
 - **2026-09-21 — per-template isolation in `RecurringExpenseService`.** Throwaway
   `@SpringBootTest` against the local Postgres: two `is_recurring` templates in group 8,

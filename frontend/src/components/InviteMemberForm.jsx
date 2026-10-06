@@ -4,25 +4,28 @@ import { inviteToGroup } from "../api/invites";
 
 export default function InviteMemberForm({ groupId, onInvited }) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
+  // Results are tagged with the query they answer, and only shown while that
+  // is still the current query: a slow response for "bo" can't overwrite the
+  // results for "bob", and clearing the box hides results without an effect
+  // having to reset state.
+  const [found, setFound] = useState({ query: "", results: [] });
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
 
+  const trimmed = query.trim();
+  const results = trimmed.length >= 2 && found.query === trimmed ? found.results : [];
+
   useEffect(() => {
-    if (query.trim().length < 2) {
-      setResults([]);
-      return;
-    }
+    if (trimmed.length < 2) return;
     const timeout = setTimeout(async () => {
       try {
-        const data = await searchUsers(query.trim());
-        setResults(data);
+        setFound({ query: trimmed, results: await searchUsers(trimmed) });
       } catch {
-        setResults([]);
+        setFound({ query: trimmed, results: [] });
       }
     }, 300);
     return () => clearTimeout(timeout);
-  }, [query]);
+  }, [trimmed]);
 
   async function handleInvite(username) {
     setError("");
@@ -31,7 +34,6 @@ export default function InviteMemberForm({ groupId, onInvited }) {
       await inviteToGroup(groupId, username);
       setStatus(`Invite sent to @${username}.`);
       setQuery("");
-      setResults([]);
       onInvited();
     } catch (err) {
       setError(err.response?.data?.error || "Could not send invite");

@@ -15,16 +15,16 @@ export default function NotificationsSection() {
   const [showRead, setShowRead] = useState(false);
   const [error, setError] = useState("");
 
-  async function load() {
-    setError("");
-    try {
-      setNotifications(await getMyNotifications());
-    } catch (err) {
-      setError(apiErrorMessage(err, "Could not load notifications"));
-    }
-  }
-
-  useEffect(() => { load(); }, []);
+  // Load once on mount. State is only set when the response arrives (never
+  // synchronously in the effect), and a response after unmount is ignored.
+  useEffect(() => {
+    let ignore = false;
+    getMyNotifications().then(
+      (data) => { if (!ignore) setNotifications(data); },
+      (err) => { if (!ignore) setError(apiErrorMessage(err, "Could not load notifications")); }
+    );
+    return () => { ignore = true; };
+  }, []);
 
   async function handleMarkRead(id) {
     try {
